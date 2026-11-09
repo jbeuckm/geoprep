@@ -234,6 +234,13 @@ function frameWithLabels(units, points, fill = 0.75, maxBoost = 3) {
   fr.zoom = Math.max(1, Math.min(48, Math.max(fr.zoom, Math.min(sep, fr.zoom * maxBoost))));
   return fr;
 }
+// Quiet name labels for the other units around a view, so the solution reads like a labelled map.
+function contextLabels(center, zoom, exclude, max = 30) {
+  const radius = 0.55 / zoom; // roughly the visible angular radius at this zoom
+  return CUR.units.filter(u => !exclude.has(u) && d3.geoDistance(u.centroid, center) < radius)
+    .sort((a, b) => b.area - a.area).slice(0, max)
+    .map(u => ({ p: u.centroid, label: u.name, textOnly: true }));
+}
 function zoomForScope() {
   const units = pool(); if (!units.length) return CUR.def.homeZoom;
   const fc = { type: 'FeatureCollection', features: units.flatMap(u => u.features) };
@@ -308,6 +315,12 @@ function render() {
   for (const m of G.markers) {
     if (d3.geoDistance(m.p, center) > Math.PI / 2 - 0.02) continue;
     const [x, y] = G.projection(m.p);
+    if (m.textOnly) { // quiet context label, centred on the point, dropped if it would collide
+      ctx.font = '500 11px system-ui, sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+      const tw = ctx.measureText(m.label).width, w = tw + 6, h = 15, r = { x: x - w / 2, y: y - h / 2, w, h };
+      if (!hits(r)) { placed.push(r); ctx.fillStyle = cssVar('--panel-faint'); ctx.fillRect(r.x, r.y, w, h); ctx.fillStyle = cssVar('--muted'); ctx.fillText(m.label, x, y); }
+      ctx.textAlign = 'start'; continue;
+    }
     ctx.beginPath(); ctx.arc(x, y, m.r || 6, 0, 2 * Math.PI); ctx.fillStyle = m.color; ctx.fill();
     ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
     if (m.label) {
@@ -738,6 +751,7 @@ function neighborsCheck() {
   G.markers = shown.map(c => ({ p: c.centroid, color: colorFor(c), r: c === S.target ? 7 : 5, label: c.name + (S.actual.has(c.name) ? (picked.has(c.name) ? ' ✓' : ' (missed)') : picked.has(c.name) ? ' ✗' : '') }));
   const group = [S.target, ...[...S.actual].map(n => CUR.byName.get(n)).filter(Boolean), ...[...picked].map(n => CUR.byName.get(n)).filter(Boolean)];
   const fr = frameWithLabels(group, group.map(u => u.centroid), 0.75, 3);
+  G.markers = G.markers.concat(contextLabels(fr.center, fr.zoom, new Set(shown)));
   flyTo(fr.center, fr.zoom);
   G.hover = true;
   neighborsRender();
