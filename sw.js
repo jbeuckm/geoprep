@@ -1,5 +1,5 @@
 /* GeoDrill service worker: precache the whole app (shell, libraries, map data) so it works offline. */
-const VERSION = 'geodrill-v4';
+const VERSION = 'geodrill-v5';
 const PRECACHE = [
   './', './index.html', './app.js', './manifest.webmanifest',
   './data/places.js', './data/regions.js', './data/subcapitals.js', './data/subcities.js',

@@ -211,6 +211,29 @@ function pointToUnitDist(pt, c) {
   return best;
 }
 function zoomForArea(area) { return Math.max(1, Math.min(10, 0.9 * Math.pow(0.05 / Math.max(area, 1e-7), 0.35))); }
+// Zoom that fits a set of units: based on the angular radius of the group around its centroid.
+function frameZoom(units, fill = 0.8) {
+  const fc = { type: 'FeatureCollection', features: units.flatMap(u => u.features) };
+  const c = d3.geoCentroid(fc);
+  let r = 0; for (const u of units) for (const v of u.vertices) r = Math.max(r, d3.geoDistance(c, v));
+  return { center: c, zoom: Math.max(1, Math.min(48, fill / Math.max(r, 0.01))) };
+}
+// Zoom needed so the closest pair of points is at least minPx apart on screen.
+// Pairs closer than ~30 km (0.0047 rad) are left to the label dodger; zooming for them would hide everything else.
+function separationZoom(points, minPx = 44, ignoreBelow = 0.0047) {
+  let minAng = Infinity;
+  for (let i = 0; i < points.length; i++) for (let j = i + 1; j < points.length; j++) { const d = d3.geoDistance(points[i], points[j]); if (d >= ignoreBelow) minAng = Math.min(minAng, d); }
+  if (!isFinite(minAng) || minAng <= 0) return 1;
+  return minPx / (minAng * G.base);
+}
+// Frame a group, then zoom in further (up to `maxBoost` times) if labelled points would overlap. Centers on the points when given.
+function frameWithLabels(units, points, fill = 0.75, maxBoost = 3) {
+  const fr = frameZoom(units, fill);
+  if (points.length > 1) fr.center = d3.geoCentroid({ type: 'MultiPoint', coordinates: points });
+  const sep = separationZoom(points);
+  fr.zoom = Math.max(1, Math.min(48, Math.max(fr.zoom, Math.min(sep, fr.zoom * maxBoost))));
+  return fr;
+}
 function zoomForScope() {
   const units = pool(); if (!units.length) return CUR.def.homeZoom;
   const fc = { type: 'FeatureCollection', features: units.flatMap(u => u.features) };
@@ -466,10 +489,12 @@ function studyStart() {
     step(); tourTimer = setInterval(step, 3000);
   };
   function showUnit(c) {
-    flyTo(c.centroid, Math.max(G.zoom, zoomForArea(c.area)));
+    const pls = CUR.places.filter(pl => pl.units.includes(c));
+    G.markers = pls.map(pl => ({ p: pl.p, color: pl.kind === 'capital' ? cssVar('--bad') : pl.kind === 'landmark' ? cssVar('--warn') : cssVar('--text'), r: pl.kind === 'capital' ? 6 : 4, label: pl.name }));
+    const fr = frameWithLabels([c], pls.map(pl => pl.p), 0.8, 1.6);
+    flyTo(pls.length > 1 ? fr.center : c.centroid, Math.max(zoomForArea(c.area) * 0.9, fr.zoom));
     G.fill = x => x === c ? cssVar('--accent') : (x.level === c.level && c.neighbors.has(x.name)) ? '#f0a53a' : null;
     const nbs = [...c.neighbors].sort();
-    G.markers = CUR.places.filter(pl => pl.units.includes(c)).map(pl => ({ p: pl.p, color: pl.kind === 'capital' ? cssVar('--bad') : pl.kind === 'landmark' ? cssVar('--warn') : cssVar('--text'), r: pl.kind === 'capital' ? 6 : 4, label: pl.name }));
     panel.querySelectorAll('.urow').forEach(r => r.classList.toggle('on', r.dataset.n === c.name));
     const el = document.getElementById('sinfo');
     el.innerHTML = `<div class="card"><div class="big">${esc(c.name)}</div>
@@ -707,13 +732,21 @@ function neighborsCheck() {
   mark(S.target, !correct);
   const okc = cssVar('--ok'), badc = cssVar('--bad'), warnc = cssVar('--warn');
   G.fill = c => c.level !== CUR.id ? null : c === S.target ? cssVar('--accent') : S.actual.has(c.name) ? (picked.has(c.name) ? okc : warnc) : picked.has(c.name) ? badc : null;
+  // Label every option on the map in the same colour as its chip, so the shapes can be matched to the list.
+  const colorFor = c => c === S.target ? cssVar('--accent') : S.actual.has(c.name) ? (picked.has(c.name) ? okc : warnc) : picked.has(c.name) ? badc : cssVar('--muted');
+  const shown = [S.target, ...S.options];
+  G.markers = shown.map(c => ({ p: c.centroid, color: colorFor(c), r: c === S.target ? 7 : 5, label: c.name + (S.actual.has(c.name) ? (picked.has(c.name) ? ' ✓' : ' (missed)') : picked.has(c.name) ? ' ✗' : '') }));
+  const group = [S.target, ...[...S.actual].map(n => CUR.byName.get(n)).filter(Boolean), ...[...picked].map(n => CUR.byName.get(n)).filter(Boolean)];
+  const fr = frameWithLabels(group, group.map(u => u.centroid), 0.75, 3);
+  flyTo(fr.center, fr.zoom);
   G.hover = true;
   neighborsRender();
   const missed = [...S.actual].filter(n => !picked.has(n)), wrong = [...picked].filter(n => !S.actual.has(n));
   document.getElementById('nbfb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${correct ? 'Correct' : 'Not quite'}</div>
     <div class="small">${esc(S.target.name)} borders ${S.actual.size} ${S.actual.size === 1 ? esc(CUR.def.unit) : esc(CUR.def.units)}${S.actual.size ? ': ' + [...S.actual].sort().map(esc).join(', ') : ''}.</div>
     ${missed.length ? `<div class="small" style="color:var(--warn)">Missed: ${missed.map(esc).join(', ')}</div>` : ''}
-    ${wrong.length ? `<div class="small" style="color:var(--bad)">Wrong: ${wrong.map(esc).join(', ')}</div>` : ''}</div>`;
+    ${wrong.length ? `<div class="small" style="color:var(--bad)">Wrong: ${wrong.map(esc).join(', ')}</div>` : ''}
+    <div class="small muted" style="margin-top:4px">Map: blue = target, green = correct pick, orange = missed neighbour, red = wrong pick. Each option is labelled.</div></div>`;
   render();
 }
 
