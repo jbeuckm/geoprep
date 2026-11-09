@@ -17,7 +17,7 @@ window.WORLD_REGIONS = {
 "Balkans":["Slovenia","Croatia","Bosnia and Herzegovina","Serbia","Montenegro","Kosovo","Albania","North Macedonia","Greece","Bulgaria","Romania"],
 "Caucasus & Turkey":["Turkey","Georgia","Armenia","Azerbaijan","Cyprus"],
 "Middle East":["Iran","Iraq","Syria","Lebanon","Israel","Palestine","Jordan","Saudi Arabia","Yemen","Oman","United Arab Emirates","Qatar","Bahrain","Kuwait","Turkey","Cyprus"],
-"Central Asia (the Stans)":["Kazakhstan","Uzbekistan","Turkmenistan","Kyrgyzstan","Tajikistan","Afghanistan","Mongolia"],
+"Central Asia & Mongolia":["Kazakhstan","Uzbekistan","Turkmenistan","Kyrgyzstan","Tajikistan","Afghanistan","Mongolia"],
 "South Asia":["India","Pakistan","Bangladesh","Nepal","Bhutan","Sri Lanka","Maldives","Afghanistan"],
 "Southeast Asia":["Myanmar","Thailand","Laos","Cambodia","Vietnam","Malaysia","Singapore","Indonesia","Brunei","Philippines","Timor-Leste"],
 "East Asia":["China","Japan","South Korea","North Korea","Mongolia","Taiwan"],

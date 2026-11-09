@@ -50,6 +50,9 @@ const LEVEL_DEFS = {
   australia: { label: 'Australia · states',         url: 'data/admin1/australia.json',object: 'units', unit: 'state', units: 'states', parent: 'Australia', home: [134, -27], homeZoom: 3, decay: 400 },
   russia:    { label: 'Russia · federal subjects',  url: 'data/admin1/russia.json',   object: 'units', unit: 'region', units: 'regions', parent: 'Russia', home: [95, 62], homeZoom: 1.5, decay: 450 },
 };
+// Known errors in the boundary data, corrected at the adjacency level so Borders/Globle teach current facts.
+// India: the 2014 transfer of the Bhadrachalam-area mandals to Andhra Pradesh is missing from Natural Earth.
+const ADJ_FIX = { india: { remove: [['Telangana', 'Odisha']], add: [['Andhra Pradesh', 'Chhattisgarh']] } };
 const LEVELS = {};           // id -> loaded level
 let WORLD = null, CUR = null; // base map level, current level
 let REGION = 'All';           // current region label within CUR
@@ -89,6 +92,16 @@ function weightOf(unit) {
   if (!c) return 2.0;
   return 1 + 3 * (c.miss / c.seen) + (c.seen < 2 ? 0.8 : 0);
 }
+const RECENT = {}; // mode+level -> recent target keys, to avoid immediate repeats
+function pickTarget(list) {
+  const key = mode + ':' + (CUR ? CUR.id : '');
+  const rec = RECENT[key] || (RECENT[key] = []);
+  const avoid = new Set(rec.slice(-Math.min(8, Math.floor(list.length / 2))));
+  const cands = list.filter(u => !avoid.has(u.key));
+  const u = weightedPick(cands.length ? cands : list);
+  rec.push(u.key); if (rec.length > 50) rec.shift();
+  return u;
+}
 function weightedPick(list) {
   const w = list.map(weightOf); let t = w.reduce((a, b) => a + b, 0) * Math.random();
   for (let i = 0; i < list.length; i++) { t -= w[i]; if (t <= 0) return list[i]; }
@@ -108,19 +121,21 @@ const PREC = PARAMS.has('prec') ? +PARAMS.get('prec') : 1.0;   // projection res
 function buildLevel(id, topo) {
   const def = LEVEL_DEFS[id], isWorld = id === 'world';
   // Two detail levels: full geometry at rest, coarse geometry while dragging or animating.
+  // Geometry maths (hit tests, centroids, areas, distances) use the original topology; simplified copies are only drawn.
   const pre = topojson.presimplify(topo);
   const fullTopo = isWorld && SIMP > 0 ? topojson.simplify(pre, topojson.quantile(pre, SIMP)) : topo;
   const coarseTopo = topojson.simplify(pre, topojson.quantile(pre, isWorld ? 0.07 : 0.15)); // keep 7% / 15% of vertices for motion frames
-  const obj = fullTopo.objects[def.object];
-  const feats = topojson.feature(fullTopo, obj).features;
+  const obj = topo.objects[def.object];
+  const feats = topojson.feature(topo, obj).features;
+  const featsDraw = topojson.feature(fullTopo, fullTopo.objects[def.object]).features;
   const featsCoarse = topojson.feature(coarseTopo, coarseTopo.objects[def.object]).features;
   const nb = topojson.neighbors(obj.geometries);
   const names = feats.map(f => isWorld ? canonicalWorld(f.properties.name) : f.properties.name);
   const groups = new Map();
   feats.forEach((f, i) => {
     const n = names[i];
-    if (!groups.has(n)) groups.set(n, { name: n, level: id, key: id + ':' + n, features: [], featuresCoarse: [], neighbors: new Set() });
-    const g = groups.get(n); g.features.push(f); g.featuresCoarse.push(featsCoarse[i]);
+    if (!groups.has(n)) groups.set(n, { name: n, level: id, key: id + ':' + n, features: [], featuresDraw: [], featuresCoarse: [], neighbors: new Set() });
+    const g = groups.get(n); g.features.push(f); g.featuresDraw.push(featsDraw[i]); g.featuresCoarse.push(featsCoarse[i]);
     nb[i].forEach(j => { if (names[j] !== n) g.neighbors.add(names[j]); });
   });
   // regions
@@ -140,6 +155,9 @@ function buildLevel(id, topo) {
     const fc = { type: 'FeatureCollection', features: g.features };
     g.centroid = d3.geoCentroid(fc);
     g.area = d3.geoArea(fc);
+    // Simplification can collapse microstates and small islands; fall back to true geometry for drawing them.
+    if (d3.geoArea({ type: 'FeatureCollection', features: g.featuresDraw }) < 0.6 * g.area) g.featuresDraw = g.features;
+    if (d3.geoArea({ type: 'FeatureCollection', features: g.featuresCoarse }) < 0.6 * g.area) g.featuresCoarse = g.featuresDraw;
     const v = []; g.features.forEach(f => collectVertices(f.geometry.coordinates, v));
     const stride = Math.max(1, Math.floor(v.length / 700));
     g.vertices = v.filter((_, i) => i % stride === 0);
@@ -171,6 +189,11 @@ function buildLevel(id, topo) {
     }
   }
   units.forEach(u => { delete u.allVertices; delete u.bounds; });
+  if (ADJ_FIX[id]) {
+    const byN = new Map(units.map(u => [u.name, u]));
+    for (const [x, y] of ADJ_FIX[id].remove || []) { byN.get(x)?.neighbors.delete(y); byN.get(y)?.neighbors.delete(x); }
+    for (const [x, y] of ADJ_FIX[id].add || []) { if (byN.has(x) && byN.has(y)) { byN.get(x).neighbors.add(y); byN.get(y).neighbors.add(x); } }
+  }
   units.sort((a, b) => a.name.localeCompare(b.name));
   const byName = new Map(units.map(u => [u.name, u]));
   const lookup = new Map();
@@ -310,7 +333,7 @@ function resize() {
   G.base = Math.min(G.w, G.h) / 2 - 12;
   render();
 }
-const geomOf = c => (G.coarse && c.featuresCoarse) ? c.featuresCoarse : c.features;
+const geomOf = c => G.coarse ? c.featuresCoarse : c.featuresDraw;
 function drawUnits(units, fallback) {
   for (const c of units) {
     const f = G.fill(c) || fallback;
@@ -402,7 +425,11 @@ function flyTo(lonlat, zoom, ms = 900) {
     else { G.coarse = true; render(); }
   });
 }
-function flyHome() { flyTo(scopeCenter(), REGION === 'All' ? CUR.def.homeZoom : zoomForScope()); }
+function flyHome() {
+  if (REGION === 'All' || !pool().length) return flyTo(CUR.def.home, CUR.def.homeZoom);
+  const fr = frameZoom(pool(), 0.8);
+  flyTo(fr.center, Math.max(CUR.def.homeZoom, fr.zoom));
+}
 function invert(x, y) {
   const p = G.projection.invert([x, y]);
   if (!p || isNaN(p[0])) return null;
@@ -614,9 +641,9 @@ function tapNext() {
   if (!S.cats.unit && !places.length) S.cats.unit = true;
   let q;
   const unitShare = places.length ? 0.6 : 1;
-  if (S.cats.unit && Math.random() < unitShare) q = { kind: 'unit', c: weightedPick(units) };
+  if (S.cats.unit && Math.random() < unitShare) q = { kind: 'unit', c: pickTarget(units) };
   else if (places.length) q = { kind: 'place', pl: pick(places) };
-  else q = { kind: 'unit', c: weightedPick(units) };
+  else q = { kind: 'unit', c: pickTarget(units) };
   if (units.length + places.length > 8 && S.round.some(r => r.q.kind === q.kind && (q.kind === 'unit' ? r.q.c === q.c : r.q.pl === q.pl))) return tapNext();
   S.q = q; S.answered = false;
   G.onTap = tapAnswer;
@@ -648,9 +675,11 @@ function tapRender() {
   panel.querySelectorAll('input[data-cat]').forEach(cb => cb.onchange = () => { S.cats[cb.dataset.cat] = cb.checked; });
   const rc = document.getElementById('revealc'); if (rc) rc.onclick = e => { e.preventDefault(); rc.replaceWith(document.createTextNode(q.pl.where)); };
 }
+function tapRounds(level) { return STATS.tap.map(r => typeof r === 'number' ? { t: r, level: 'world' } : r).filter(r => r.level === level).map(r => r.t); }
 function tapHistory() {
-  const best = STATS.tap.length ? Math.max(...STATS.tap) : null, avg = STATS.tap.length ? Math.round(STATS.tap.reduce((a, b) => a + b, 0) / STATS.tap.length) : null;
-  return `<div class="small muted" style="margin-top:8px">Rounds played: ${STATS.tap.length}${best != null ? ` · Best ${best}/${S.n * 100} · Avg ${avg}` : ''}</div>`;
+  const t = tapRounds(CUR.id);
+  const best = t.length ? Math.max(...t) : null, avg = t.length ? Math.round(t.reduce((a, b) => a + b, 0) / t.length) : null;
+  return `<div class="small muted" style="margin-top:8px">${esc(scopeLabel())} rounds played: ${t.length}${best != null ? ` · Best ${best}/${S.n * 100} · Avg ${avg}` : ''}</div>`;
 }
 function tapAnswer(p) {
   if (S.answered) return; S.answered = true; G.onTap = null; canvas.classList.remove('tap');
@@ -683,7 +712,7 @@ function tapAnswer(p) {
 }
 function tapSummary() {
   const total = S.round.reduce((a, r) => a + r.score, 0);
-  STATS.tap.push(total); save();
+  STATS.tap.push({ t: total, level: CUR.id }); save();
   resetGlobe(); G.hover = true;
   G.markers = S.round.map(r => ({ p: r.q.kind === 'unit' ? r.q.c.centroid : r.q.pl.p, color: r.score >= 80 ? cssVar('--ok') : r.score >= 40 ? cssVar('--warn') : cssVar('--bad'), r: 5 }));
   flyHome(); render();
@@ -699,7 +728,7 @@ function tapSummary() {
 // ----- Globle -----
 function globleStart() {
   if (!pool().length) return noScope();
-  S.target = weightedPick(pool()); S.guesses = []; S.done = false;
+  S.target = pickTarget(pool()); S.guesses = []; S.done = false;
   G.hover = false;
   globleRender();
 }
@@ -763,7 +792,7 @@ function globleEnd(won) {
 // ----- Borders (neighbours) -----
 function neighborsStart() {
   if (!pool().length) return noScope();
-  const t = weightedPick(pool());
+  const t = pickTarget(pool());
   S.target = t; S.sel = new Set(); S.checked = false;
   const actual = [...t.neighbors].map(n => CUR.byName.get(n)).filter(c => c && c.playable);
   const nDistract = Math.max(3, actual.length);
@@ -831,7 +860,7 @@ function closerStart() {
   if (pool().length < 1 || CUR.playable.length < 3) return noScope();
   let x, a, b, da, db, tries = 0;
   do {
-    x = weightedPick(pool());
+    x = pickTarget(pool());
     const others = CUR.playable.filter(c => c !== x);
     const near = others.sort((p, q) => haversine(p.centroid, x.centroid) - haversine(q.centroid, x.centroid)).slice(0, 40);
     a = pick(near); b = pick(near);
@@ -880,7 +909,7 @@ function closerAnswer(k) {
 // ----- Name It -----
 function nameitStart() {
   if (!pool().length || CUR.playable.length < 4) return noScope();
-  const t = weightedPick(pool());
+  const t = pickTarget(pool());
   const near = CUR.playable.filter(c => c !== t).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid)).slice(0, 10);
   S.t = t; S.opts = shuffle([t, ...shuffle(near).slice(0, 3)]); S.answered = false;
   G.fill = c => c === t ? cssVar('--accent') : null;
@@ -927,7 +956,7 @@ function flagsStart() {
   }
   const cands = pool().filter(flagCode);
   if (cands.length < 4 && CUR.playable.filter(flagCode).length < 4) return noScope();
-  const t = weightedPick(cands.length ? cands : CUR.playable.filter(flagCode));
+  const t = pickTarget(cands.length ? cands : CUR.playable.filter(flagCode));
   const near = CUR.playable.filter(c => c !== t && flagCode(c)).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid)).slice(0, 12);
   S.t = t; S.opts = shuffle([t, ...shuffle(near).slice(0, 3)]); S.answered = false;
   flagsRender();
@@ -968,16 +997,16 @@ function flagsAnswer(i) {
 document.getElementById('statsbtn').onclick = () => {
   resetGlobe(); G.hover = true; [...nav.children].forEach(b => b.classList.remove('on')); mode = 'stats';
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
-  const rows = Object.entries(STATS.units).filter(([, v]) => v.seen >= 2).map(([k, v]) => ({ k, rate: v.miss / v.seen, ...v })).sort((a, b) => b.rate - a.rate || b.seen - a.seen);
+  const rows = Object.entries(STATS.units).filter(([, v]) => v.seen >= 2 && v.miss > 0).map(([k, v]) => ({ k, rate: v.miss / v.seen, ...v })).sort((a, b) => b.rate - a.rate || b.seen - a.seen);
   const weak = rows.slice(0, 20);
   const g = STATS.globle, gavg = g.length ? (g.reduce((a, b) => a + b, 0) / g.length).toFixed(1) : '–', gbest = g.length ? Math.min(...g) : '–';
-  const t = STATS.tap, tavg = t.length ? Math.round(t.reduce((a, b) => a + b, 0) / t.length) : '–', tbest = t.length ? Math.max(...t) : '–';
+  const t = tapRounds(CUR.id), tavg = t.length ? Math.round(t.reduce((a, b) => a + b, 0) / t.length) : '–', tbest = t.length ? Math.max(...t) : '–';
   const seen = CUR.playable.filter(u => STATS.units[u.key]).length;
   G.fill = c => { const s = STATS.units[c.key]; if (!s) return null; return d3.interpolateRgb(cssVar('--ok'), cssVar('--bad'))(s.miss / s.seen); };
   flyHome();
   panel.innerHTML = `<h2>Your stats</h2><p class="sub">Globe shows every ${esc(CUR.def.unit)} you have met: green = reliable, red = keeps costing you. Unseen ones stay neutral.</p>
     <div class="card"><div class="stat"><span>Globle games</span><b>${g.length}</b></div><div class="stat"><span>Globle avg guesses</span><b>${gavg}</b></div><div class="stat"><span>Globle best</span><b>${gbest}</b></div>
-    <div class="stat"><span>Tap rounds</span><b>${t.length}</b></div><div class="stat"><span>Tap avg / best (of 500)</span><b>${tavg} / ${tbest}</b></div>
+    <div class="stat"><span>Tap rounds (${esc(CUR.def.label.split(' · ')[0])})</span><b>${t.length}</b></div><div class="stat"><span>Tap avg / best (of 500)</span><b>${tavg} / ${tbest}</b></div>
     <div class="stat"><span>${esc(CUR.def.units)} met in this level</span><b>${seen} / ${CUR.playable.length}</b></div></div>
     <h2 style="margin-top:14px">Weak spots</h2>
     ${weak.length ? weak.map(r => `<div class="stat"><span>${r.level === 'world' ? flagImg(WORLD.byName.get(r.name)) : ''}${esc(r.name)} <span class="muted small">${r.level === 'world' ? '' : esc(LEVEL_DEFS[r.level].label.split(' · ')[0])}</span></span><b>${Math.round(r.rate * 100)}% missed <span class="muted">(${r.seen})</span></b></div>`).join('') : '<p class="muted small">Play a few rounds; units you miss twice or more show up here, and come up more often in every mode.</p>'}

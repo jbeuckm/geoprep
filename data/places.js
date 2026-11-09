@@ -129,9 +129,9 @@ window.PLACES = [
 ["Christ the Redeemer","Brazil",-22.95,-43.21,"landmark"],["Chichén Itzá","Mexico",20.68,-88.57,"landmark"],["Statue of Liberty","United States",40.69,-74.04,"landmark"],
 ["Golden Gate Bridge","United States",37.82,-122.48,"landmark"],["Sydney Opera House","Australia",-33.86,151.22,"landmark"],["Hagia Sophia","Turkey",41.01,28.98,"landmark"],
 ["Acropolis of Athens","Greece",37.97,23.73,"landmark"],["Alhambra","Spain",37.18,-3.59,"landmark"],["Neuschwanstein Castle","Germany",47.56,10.75,"landmark"],
-["Mount Sinai","Egypt",28.54,33.98,"landmark"],["Timbuktu (Djinguereber)","Mali",16.77,-3.01,"landmark"],["Serengeti","Tanzania",-2.33,34.83,"landmark"],
+["Mount Sinai","Egypt",28.54,33.98,"landmark"],["Serengeti","Tanzania",-2.33,34.83,"landmark"],
 ["Okavango Delta","Botswana",-19.30,22.90,"landmark"],["Namib Desert","Namibia",-24.70,15.30,"landmark"],["Gobi Desert","Mongolia",42.80,105.00,"landmark"],
-["Dead Sea","Israel / Jordan",31.50,35.50,"landmark"],["Caspian Sea (centre)","Kazakhstan",41.50,50.80,"landmark"],["Aral Sea","Uzbekistan / Kazakhstan",45.00,59.50,"landmark"],
+["Dead Sea","Israel / Jordan",31.50,35.50,"landmark"],["Aral Sea","Uzbekistan / Kazakhstan",45.00,59.50,"landmark"],
 ["Bering Strait","Russia / United States",65.80,-169.00,"landmark"],["Bosporus","Turkey",41.12,29.07,"landmark"],["Strait of Hormuz","Iran / Oman",26.57,56.25,"landmark"],
 ["Strait of Malacca","Malaysia / Indonesia",2.50,101.00,"landmark"],["Bab-el-Mandeb","Yemen / Djibouti",12.58,43.33,"landmark"],["English Channel","United Kingdom / France",50.20,-1.00,"landmark"],
 ];
