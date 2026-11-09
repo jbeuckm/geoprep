@@ -533,7 +533,7 @@ function scopeLabel() { return (REGION === 'All' ? CUR.def.label.split(' · ')[0
 
 // ---------- Modes ----------
 const panel = document.getElementById('panel');
-const MODES = [['train', 'Train'], ['study', 'Study'], ['explore', 'Explore'], ['tap', 'Tap'], ['globle', 'Globle'], ['neighbors', 'Borders'], ['closer', 'Closer'], ['nameit', 'Name It'], ['flags', 'Flags']];
+const MODES = [['train', 'Train'], ['study', 'Study'], ['explore', 'Explore'], ['tap', 'Tap'], ['globle', 'Hot & Cold'], ['neighbors', 'Borders'], ['closer', 'Closer'], ['nameit', 'Name It'], ['flags', 'Flags'], ['clues', 'Clues']];
 let mode = null, S = {}, tourTimer = null;
 const nav = document.getElementById('nav');
 MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => { if (id !== 'train') trainStop(true); setMode(id); }; nav.appendChild(b); });
@@ -542,7 +542,7 @@ function setMode(id) {
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   [...nav.children].forEach(b => b.classList.toggle('on', b.dataset.id === id));
   resetGlobe(); render();
-  ({ train: trainLanding, study: studyStart, explore, tap: tapStart, globle: globleStart, neighbors: neighborsStart, closer: closerStart, nameit: nameitStart, flags: flagsStart })[id]();
+  ({ train: trainLanding, study: studyStart, explore, tap: tapStart, globle: globleStart, neighbors: neighborsStart, closer: closerStart, nameit: nameitStart, flags: flagsStart, clues: cluesStart })[id]();
 }
 function coach(items) { return `<div class="coach"><b>Coach</b><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`; }
 function scopeLine() { return `<div class="scopeline">Scope: <b>${esc(scopeLabel())}</b> · ${pool().length} ${esc(CUR.def.units)}</div>`; }
@@ -551,13 +551,17 @@ function noScope() { panel.innerHTML = `<h2>Nothing in scope</h2><p class="sub">
 // ----- Train: adaptive programme -----
 const TRAIN = { active: false, program: null, topic: null, lastTopic: null, lastMode: null, remaining: 0, setSeen: 0, setMiss: 0, phase: 'run', sets: 0 };
 const PROGRAMS = {
-  maptap: { label: 'MapTap', blurb: 'Tap places, name shapes, flags', levels: 'all', modes: { world: { tap: .5, nameit: .3, flags: .2 }, sub: { tap: .6, nameit: .4 } } },
-  globle: { label: 'Globle', blurb: 'Hidden country, borders, distances', levels: 'world', modes: { world: { globle: .4, neighbors: .4, closer: .2 }, sub: { neighbors: .6, closer: .4 } } },
-  mixed:  { label: 'Both', blurb: 'Everything, weighted to your misses', levels: 'all', modes: { world: { tap: .3, nameit: .2, flags: .1, globle: .15, neighbors: .15, closer: .1 }, sub: { tap: .35, nameit: .25, globle: .15, neighbors: .15, closer: .1 } } },
+  locate:  { label: 'Locate', blurb: 'Tap places on the globe, name shapes, flags', levels: 'all', modes: { world: { tap: .5, nameit: .3, flags: .2 }, sub: { tap: .6, nameit: .4 } } },
+  hotcold: { label: 'Hot & Cold', blurb: 'Find a hidden country from warm/cold guesses; borders and distances', levels: 'world', modes: { world: { globle: .4, neighbors: .4, closer: .2 }, sub: { neighbors: .6, closer: .4 } } },
+  street:  { label: 'Street Clues', blurb: 'Road lines, poles, signs, plates, camera quirks, capitals', levels: 'world', needClues: true, modes: { world: { clues: .5, flags: .2, nameit: .15, tap: .15 }, sub: { tap: 1 } } },
+  mixed:   { label: 'Everything', blurb: 'All drills, weighted to your misses', levels: 'all', modes: { world: { tap: .25, nameit: .15, flags: .1, globle: .15, neighbors: .15, closer: .1, clues: .1 }, sub: { tap: .35, nameit: .25, globle: .15, neighbors: .15, closer: .1 } } },
 };
 function trainTopics(program) {
   const out = [];
-  for (const r of Object.keys(window.WORLD_REGIONS)) out.push({ level: 'world', region: r, label: r, keys: window.WORLD_REGIONS[r].map(n => 'world:' + n) });
+  for (const r of Object.keys(window.WORLD_REGIONS)) {
+    if (PROGRAMS[program].needClues && window.WORLD_REGIONS[r].filter(n => window.CLUES[n]).length < 4) continue;
+    out.push({ level: 'world', region: r, label: r, keys: window.WORLD_REGIONS[r].map(n => 'world:' + n) });
+  }
   if (PROGRAMS[program].levels === 'all') {
     for (const [id, regs] of Object.entries(window.LEVEL_REGIONS)) {
       const name = LEVEL_DEFS[id].label.split(' · ')[0];
@@ -593,12 +597,13 @@ function weakestNow(n = 3) {
 function trainLanding() {
   TRAIN.active = false; trainBar();
   let saved = null; try { saved = localStorage.getItem('geodrill.program'); } catch (e) {}
+  if (saved && !PROGRAMS[saved]) saved = null;
   const weak = weakestNow();
   panel.innerHTML = `<h2>Train</h2>
     <p class="sub">Pick what you're practising for. The app chooses the topics and drills, doubles down where you miss, and moves on when you're solid. No settings needed.</p>
     <div class="bigopts">${Object.entries(PROGRAMS).map(([id, p]) => `<button data-p="${id}"><b>${p.label}${saved === id ? ' <span class="muted small">· continue</span>' : ''}</b><small>${p.blurb}</small></button>`).join('')}</div>
     ${weak.length ? `<div class="small"><b>Where you've struggled:</b> ${weak.map(x => `${esc(x.t.label)} (${Math.round(100 * x.miss / x.seen)}% missed)`).join(', ')}</div>` : '<div class="small muted">No history yet. The first sets sample widely to find your weak spots.</div>'}
-    <div class="small muted" style="margin-top:14px">Prefer to steer yourself? Use Study and the level/region dropdowns. Sets are 5 questions, or one Tap round or Globle game.</div>`;
+    <div class="small muted" style="margin-top:14px">Prefer to steer yourself? Use Study and the level/region dropdowns. Sets are 5 questions, or one Tap round or Hot &amp; Cold game.</div>`;
   panel.querySelectorAll('.bigopts button').forEach(b => b.onclick = () => trainChoose(b.dataset.p));
 }
 function trainChoose(program) {
@@ -662,7 +667,7 @@ function studyStart() {
     ${scopeLine()}
     <p class="sub">Click a ${esc(CUR.def.unit)} to fly to it and see its neighbours. Then drill the same scope with the buttons below.</p>
     <div class="row" style="margin:6px 0 10px">
-      <button class="btn" data-m="tap">Tap</button><button class="btn" data-m="nameit">Name It</button><button class="btn" data-m="neighbors">Borders</button><button class="btn" data-m="globle">Globle</button>${CUR.isWorld ? '<button class="btn" data-m="flags">Flags</button>' : ''}
+      <button class="btn" data-m="tap">Tap</button><button class="btn" data-m="nameit">Name It</button><button class="btn" data-m="neighbors">Borders</button><button class="btn" data-m="globle">Hot &amp; Cold</button>${CUR.isWorld ? '<button class="btn" data-m="flags">Flags</button><button class="btn" data-m="clues">Clues</button>' : ''}
       <button class="btn sec" id="tour">▶ Tour</button>
     </div>
     <div id="sinfo"></div>
@@ -670,7 +675,7 @@ function studyStart() {
     ${coach(CUR.isWorld ? [
       'Work one region at a time until Name It and Borders are automatic, then widen the scope.',
       'For each country, memorise three things: shape, one neighbour in each direction, and which side the capital sits on.',
-      'Islands and microstates are where MapTap taps go wrong. Learn them as pairs with the nearest big country.']
+      'Islands and microstates are where placement taps go wrong. Learn them as pairs with the nearest big country.']
     : [
       `Learn the ${esc(CUR.def.units)} as a grid: which row and column each sits in, then its capital.`,
       'The Tour cycles through every unit in scope with its capital. Run it twice, then switch to Name It.'])}`;
@@ -698,7 +703,8 @@ function studyStart() {
     el.innerHTML = `<div class="card"><div class="big">${flagImg(c, 'flag big')}${esc(c.name)}</div>
       <div class="small muted">${esc(c.region)}${c.capital ? ' · Capital: ' + esc(c.capital) : ''}</div>
       <div style="margin-top:6px"><b>Borders (${nbs.length}):</b> ${nbs.length ? nbs.map(esc).join(', ') : 'none — island or isolated'}</div>
-      ${c.places && c.places.length ? `<div style="margin-top:4px"><b>Cities & places:</b> ${c.places.map(esc).join(', ')}</div>` : ''}</div>`;
+      ${c.places && c.places.length ? `<div style="margin-top:4px"><b>Cities & places:</b> ${c.places.map(esc).join(', ')}</div>` : ''}
+      ${clueCard(c)}</div>`;
     render();
   }
 }
@@ -711,7 +717,7 @@ function explore() {
     <datalist id="clist">${CUR.playable.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>
     <div id="exinfo"></div>
     ${coach(['Learn clusters, not single countries: the Sahel strip, the Stans, the Balkans, the Gulf, Central America, the Guianas.',
-      'For each country, know at least one neighbour in each direction. Globle is solved by walking borders.',
+      'For each country, know at least one neighbour in each direction. Hot-and-cold games are solved by walking borders.',
       'Note where a country is <i>not</i>: Mongolia touches only Russia and China. Portugal touches only Spain.'])}`;
   const q = document.getElementById('exq');
   q.addEventListener('change', () => { const c = findUnit(q.value); if (c) showUnit(c); });
@@ -725,7 +731,8 @@ function explore() {
     document.getElementById('exinfo').innerHTML = `<div class="card"><div class="big">${flagImg(c, 'flag big')}${esc(c.name)}</div>
       <div class="small muted">${esc(c.region)}${c.capital ? ' · Capital: ' + esc(c.capital) : ''}</div>
       <div style="margin-top:6px"><b>Borders (${nbs.length}):</b> ${nbs.length ? nbs.map(esc).join(', ') : 'none — island or isolated'}</div>
-      ${c.places && c.places.length ? `<div style="margin-top:4px"><b>Cities & places:</b> ${c.places.map(esc).join(', ')}</div>` : ''}</div>`;
+      ${c.places && c.places.length ? `<div style="margin-top:4px"><b>Cities & places:</b> ${c.places.map(esc).join(', ')}</div>` : ''}
+      ${clueCard(c)}</div>`;
     render();
   }
 }
@@ -757,7 +764,7 @@ function tapRender() {
   const label = q.kind === 'unit' ? q.c.name : q.pl.name;
   const kindTxt = q.kind === 'unit' ? CUR.def.unit : q.pl.kind;
   const idx = S.round.length + 1;
-  panel.innerHTML = `<h2>Tap <span class="muted small">· MapTap drill</span></h2>
+  panel.innerHTML = `<h2>Tap <span class="muted small">· placement drill</span></h2>
     ${scopeLine()}
     <div class="row small muted"><span>Question ${idx} / ${S.n}</span><span>·</span><span>Round score ${total}</span></div>
     <div class="scorebar"><i style="width:${total / S.n}%"></i></div>
@@ -838,7 +845,7 @@ function globleStart() {
 function globleRender() {
   const sorted = S.guesses.slice().sort((a, b) => a.d - b.d);
   const games = STATS.globle, avg = games.length ? (games.reduce((a, b) => a + b, 0) / games.length).toFixed(1) : '–';
-  panel.innerHTML = `<h2>Globle <span class="muted small">· unlimited practice</span></h2>
+  panel.innerHTML = `<h2>Hot &amp; Cold <span class="muted small">· hidden ${esc(CUR.def.unit)}</span></h2>
     ${scopeLine()}
     <p class="sub">A mystery ${esc(CUR.def.unit)} from the scope is hidden. Guess any ${esc(CUR.def.unit)}: the warmer the colour, the closer it is. Bordering ones show darkest red.</p>
     ${S.done ? '' : `<form id="gform"><input type="text" id="gq" placeholder="Type a ${esc(CUR.def.unit)} and press Enter" list="glist" autocomplete="off"></form>
@@ -915,7 +922,7 @@ function neighborsRender() {
   const noneOn = S.sel.has('__none'); let noneCls = noneOn ? 'on' : '';
   if (S.checked) noneCls = S.actual.size === 0 ? (noneOn ? 'ok' : 'miss') : (noneOn ? 'bad' : '');
   const st = STATS.streaks.neighbors || 0;
-  panel.innerHTML = `<h2>Borders <span class="muted small">· Globle fundamentals</span></h2>
+  panel.innerHTML = `<h2>Borders <span class="muted small">· neighbour recall</span></h2>
     ${scopeLine()}
     <p class="sub">Select every ${esc(CUR.def.unit)} that shares a land border with the highlighted one, then check.</p>
     <div class="prompt">${flagImg(t, 'flag big')}${esc(t.name)}</div><div class="hint">${esc(t.region || '')} · streak ${st}</div>
@@ -923,7 +930,7 @@ function neighborsRender() {
     <div id="nbfb"></div>
     <div class="row">${S.checked ? '<button class="btn" id="nbnext">Next</button>' : '<button class="btn" id="nbcheck">Check</button> <button class="btn sec" id="nbskip">Skip</button>'}</div>
     ${coach(['Say neighbours clockwise from the north. A fixed order makes recall reliable under time pressure.',
-      'Islands and near-islands are Globle traps: Sri Lanka, Madagascar, Cuba, Philippines, Japan, Iceland, New Zealand have no land borders.',
+      'Islands and near-islands are hot-and-cold traps: Sri Lanka, Madagascar, Cuba, Philippines, Japan, Iceland, New Zealand have no land borders.',
       'Remember surprising borders: Russia–North Korea, France–Brazil (French Guiana), Namibia–Zambia (Caprivi), Denmark–Germany only.'])}`;
   panel.querySelectorAll('.chip').forEach(b => b.onclick = () => { if (S.checked) return; const n = b.dataset.n;
     if (n === '__none') { S.sel.clear(); S.sel.add('__none'); } else { S.sel.delete('__none'); S.sel.has(n) ? S.sel.delete(n) : S.sel.add(n); } neighborsRender(); });
@@ -979,12 +986,12 @@ function closerRender() {
   const st = STATS.streaks.closer || 0;
   panel.innerHTML = `<h2>Closer <span class="muted small">· distance intuition</span></h2>
     ${scopeLine()}
-    <p class="sub">Which of the two is closer to the target? Distance is border-to-border, as in Globle.</p>
+    <p class="sub">Which of the two is closer to the target? Distance is border-to-border, as in hot-and-cold games.</p>
     <div class="hint">Streak ${st}</div>
     <div class="prompt">${flagImg(S.x, 'flag big')}${esc(S.x.name)}</div>
     <div class="opts" id="copts"><button class="btn" data-k="a">${flagImg(S.a)}${esc(S.a.name)}</button><button class="btn" data-k="b">${flagImg(S.b)}${esc(S.b.name)}</button></div>
     <div id="cfb"></div>
-    ${coach(['Think in border hops, not map inches: Globle colours come from the nearest edges of two countries.',
+    ${coach(['Think in border hops, not map inches: hot-and-cold colours come from the nearest edges of two countries.',
       'Big countries are "close" to a lot: Russia is near Japan, Norway, Alaska and North Korea at once.',
       'Build a mental ruler: Paris–Moscow ≈ 2,500 km, Cairo–Cape Town ≈ 7,200 km, New York–LA ≈ 3,900 km.'])}`;
   panel.querySelectorAll('#copts .btn').forEach(b => b.onclick = () => closerAnswer(b.dataset.k));
@@ -1023,13 +1030,13 @@ function nameitStart() {
 }
 function nameitRender() {
   const st = STATS.streaks.nameit || 0;
-  panel.innerHTML = `<h2>Name It <span class="muted small">· reverse MapTap</span></h2>
+  panel.innerHTML = `<h2>Name It <span class="muted small">· shape and position</span></h2>
     ${scopeLine()}
     <p class="sub">Which ${esc(CUR.def.unit)} is highlighted? No labels, no neighbours: just shape and position.</p>
     <div class="hint">Streak ${st}</div>
     <div class="opts" id="nopts">${S.opts.map((c, i) => `<button class="btn" data-i="${i}">${esc(c.name)}</button>`).join('')}</div>
     <div id="nfb"></div>
-    ${coach(['Distractors are always nearby, so this trains exactly the confusions that cost MapTap points.',
+    ${coach(['Distractors are always nearby, so this trains exactly the confusions that cost placement points.',
       'Common swaps: Niger/Nigeria, Slovakia/Slovenia, Zambia/Zimbabwe, Guinea/Guinea-Bissau, Paraguay/Uruguay, Latvia/Lithuania, Oman/Yemen.'])}`;
   panel.querySelectorAll('#nopts .btn').forEach(b => b.onclick = () => nameitAnswer(+b.dataset.i));
 }
@@ -1096,6 +1103,68 @@ function flagsAnswer(i) {
   render();
 }
 
+// ----- Street clues -----
+const CLUE_LABELS = { drive: 'Drives on the', lines: 'Road lines', bollards: 'Bollards', poles: 'Utility poles', signs: 'Signs', plates: 'Plates', car: 'Camera car', lang: 'Language', tld: 'Domain', other: 'Also' };
+function clueRows(u, keys) {
+  const c = window.CLUES[u.name]; if (!c) return '';
+  return `<div class="clues">${(keys || Object.keys(c)).filter(k => c[k]).map(k => `<div class="clue"><span class="ck">${CLUE_LABELS[k] || k}</span><span>${esc(c[k])}</span></div>`).join('')}</div>`;
+}
+function clueCard(u) {
+  if (!window.CLUES[u.name]) return '';
+  return `<details class="cluebox" open><summary>Street clues${u.capital ? ` · capital ${esc(u.capital)}` : ''}</summary>${clueRows(u)}</details>`;
+}
+function cluesStart() {
+  if (!CUR.isWorld) {
+    panel.innerHTML = `<h2>Clues</h2><p class="sub">Street clues are available on the World level.</p><div class="row"><button class="btn" id="toworld">Switch to World</button></div>`;
+    document.getElementById('toworld').onclick = () => setLevel('world');
+    return;
+  }
+  const has = u => !!window.CLUES[u.name];
+  const all = CUR.playable.filter(has), cands = pool().filter(has);
+  if (all.length < 4) return noScope();
+  const t = pickTarget(cands.length ? cands : all);
+  const near = all.filter(c => c !== t).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid)).slice(0, 15);
+  const sameSide = near.filter(c => window.CLUES[c.name].drive === window.CLUES[t.name].drive);
+  S.t = t; S.opts = shuffle([t, ...shuffle(sameSide.length >= 3 ? sameSide : near).slice(0, 3)]); S.answered = false;
+  const keys = shuffle(Object.keys(window.CLUES[t.name]).filter(k => k !== 'tld'));
+  S.shown = keys.slice(0, 3); S.hidden = keys.slice(3);
+  cluesRender();
+}
+function cluesRender() {
+  const st = STATS.streaks.clues || 0;
+  panel.innerHTML = `<h2>Clues <span class="muted small">· what you'd see on the street</span></h2>
+    ${scopeLine()}
+    <p class="sub">Which country matches these clues? Options share the driving side and region, so the details decide it.</p>
+    <div class="hint">Streak ${st}</div>
+    ${clueRows(S.t, S.shown)}
+    <div class="row" style="margin:6px 0 10px">${S.hidden.length ? '<button class="btn sec" id="morec">Reveal another clue</button>' : ''}</div>
+    <div class="opts" id="clopts">${S.opts.map((c, i) => `<button class="btn" data-i="${i}">${esc(c.name)}</button>`).join('')}</div>
+    <div id="clfb"></div>
+    ${coach(['Order of checks on a real round: driving side, then road-line colours, then script and language, then plates, poles and bollards.',
+      'Camera-car quirks are the fastest tells: Kenya snorkel, Ghana tape, Nigeria follow car, Senegal and Mongolia visible car.',
+      'Yellow centre lines point to the Americas and a few others (Norway, Iceland, Japan no-overtaking); all-white lines suggest Europe.'])}`;
+  const m = document.getElementById('morec'); if (m) m.onclick = () => { S.shown.push(S.hidden.shift()); cluesRender(); };
+  panel.querySelectorAll('#clopts .btn').forEach(b => b.onclick = () => cluesAnswer(+b.dataset.i));
+}
+function cluesAnswer(i) {
+  if (S.answered) return; S.answered = true;
+  const correct = S.opts[i] === S.t;
+  STATS.streaks.clues = correct ? (STATS.streaks.clues || 0) + 1 : 0;
+  mark(S.t, !correct); save();
+  panel.querySelectorAll('#clopts .btn').forEach(b => { const c = S.opts[+b.dataset.i]; if (c === S.t) b.classList.add('ok'); else if (+b.dataset.i === i) b.classList.add('bad'); });
+  G.fill = c => c === S.t ? cssVar('--accent') : null;
+  const z = Math.max(1, zoomForUnit(S.t) * 0.8);
+  flyTo(S.t.centroid, z);
+  G.markers = contextLabels(S.t.centroid, z, new Set([S.t]));
+  G.hover = true;
+  document.getElementById('clfb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${flagImg(S.t, 'flag big')}${correct ? 'Correct' : 'It was ' + esc(S.t.name)}</div>
+    <div class="small muted">${esc(S.t.region || '')}${S.t.capital ? ' · Capital: ' + esc(S.t.capital) : ''}</div>
+    ${clueRows(S.t)}
+    <div style="margin-top:8px"><button class="btn" id="clnext">Next</button></div></div>`;
+  document.getElementById('clnext').onclick = () => advance(() => { resetGlobe(); cluesStart(); });
+  render();
+}
+
 // ----- Stats -----
 document.getElementById('statsbtn').onclick = () => {
   resetGlobe(); G.hover = true; [...nav.children].forEach(b => b.classList.remove('on')); mode = 'stats';
@@ -1108,7 +1177,7 @@ document.getElementById('statsbtn').onclick = () => {
   G.fill = c => { const s = STATS.units[c.key]; if (!s) return null; return d3.interpolateRgb(cssVar('--ok'), cssVar('--bad'))(s.miss / s.seen); };
   flyHome();
   panel.innerHTML = `<h2>Your stats</h2><p class="sub">Globe shows every ${esc(CUR.def.unit)} you have met: green = reliable, red = keeps costing you. Unseen ones stay neutral.</p>
-    <div class="card"><div class="stat"><span>Globle games</span><b>${g.length}</b></div><div class="stat"><span>Globle avg guesses</span><b>${gavg}</b></div><div class="stat"><span>Globle best</span><b>${gbest}</b></div>
+    <div class="card"><div class="stat"><span>Hot &amp; Cold games</span><b>${g.length}</b></div><div class="stat"><span>Hot &amp; Cold avg guesses</span><b>${gavg}</b></div><div class="stat"><span>Hot &amp; Cold best</span><b>${gbest}</b></div>
     <div class="stat"><span>Tap rounds (${esc(CUR.def.label.split(' · ')[0])})</span><b>${t.length}</b></div><div class="stat"><span>Tap avg / best (of 500)</span><b>${tavg} / ${tbest}</b></div>
     <div class="stat"><span>${esc(CUR.def.units)} met in this level</span><b>${seen} / ${CUR.playable.length}</b></div></div>
     <h2 style="margin-top:14px">Weak spots</h2>

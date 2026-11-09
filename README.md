@@ -1,6 +1,6 @@
 # GeoDrill
 
-A browser geography trainer built to raise scores in **MapTap** (tap a prompted place on a 3D globe, scored by distance) and **Globle** (guess the hidden country from hot/cold colours).
+A browser geography trainer for map-placement, hot-and-cold country hunts and street-level identification. Built for players of games like MapTap, Globle and GeoGuessr, but the app itself names skills, not games.
 
 **Live:** https://jbeuckm.github.io/geoprep/ — installable as a PWA (Install button in Chrome/Edge/Android; on iOS use Share → Add to Home Screen). Works fully offline once loaded.
 
@@ -18,7 +18,7 @@ Deep links: `index.html?level=india&region=South`, `?level=russia&region=Far%20E
 
 ## Train (default)
 
-The landing screen asks one question: **MapTap**, **Globle**, or **Both**. The app then runs sets of five questions (or one Tap round or Globle game), choosing the topic and drill itself:
+The landing screen offers four programmes: **Locate** (tap, shapes, flags), **Hot & Cold** (hidden country, borders, distances), **Street Clues** (clues, flags, capitals) or **Everything**. The app then runs sets of five questions (or one Tap round or Globle game), choosing the topic and drill itself:
 
 - Topics are the study regions and sub-national regions. Each is weighted by `(misses + 1) / (seen + 2)`, so unseen topics are sampled early and mastered ones fade. The last topic is down-weighted to avoid ruts.
 - A set with 40%+ misses triggers a **review**: the study guide opens on that topic, then the same topic is quizzed again. After one review-and-retry the programme moves on; the topic's miss rate brings it back later.
@@ -47,12 +47,13 @@ Two dropdowns in the header set what every mode uses:
 |---|---|---|
 | Study | Region list with capitals, neighbour counts and city counts. Click a unit to fly to it with its cities pinned. Tour auto-cycles the scope. Buttons launch any drill on the same scope. | both |
 | Explore | Hover/click any unit: name, neighbours, capital, cities | both |
-| Tap | 5-question rounds: tap a unit, capital, city or landmark on the globe. Inside the border = 100, else exponential falloff with distance (tighter scale for sub-national levels) | MapTap |
-| Globle | Unlimited Globle replica on the current level and scope. Border-to-border distances, same colour logic, region hint, give-up reveal | Globle |
-| Borders | Pick every land neighbour of a unit from nearby distractors, or "no land borders" | Globle |
-| Closer | Which of two nearby units is closer to the target (border distance) | Globle |
-| Name It | A unit is highlighted with no labels; choose its name from four nearby options. Nearby countries outside the options are labelled for orientation | MapTap |
-| Flags | A national flag; choose the country from four regional neighbours (world level) | both |
+| Tap | 5-question rounds: tap a unit, capital, city or landmark on the globe. Inside the border = 100, else exponential falloff with distance (tighter scale for sub-national levels) | placement |
+| Hot & Cold | A hidden unit; each guess is coloured by border-to-border distance. Region hint, give-up reveal | hot/cold |
+| Borders | Pick every land neighbour of a unit from nearby distractors, or "no land borders" | hot/cold |
+| Closer | Which of two nearby units is closer to the target (border distance) | hot/cold |
+| Name It | A unit is highlighted with no labels; choose its name from four nearby options. Nearby countries outside the options are labelled for orientation | placement |
+| Flags | A national flag; choose the country from four regional neighbours (world level) | all |
+| Clues | Three street-level clues (driving side, road lines, poles, signs, plates, camera-car quirks, language); pick the country from four same-side neighbours. Reveal more clues on demand | street |
 
 Every mode records misses per unit in `localStorage`. Units you miss come up more often in all modes, and the **Stats** view maps them green-to-red and lists the weakest.
 
@@ -63,6 +64,7 @@ Every mode records misses per unit in `localStorage`. Units you miss come up mor
 - `data/places.js`, `data/subcapitals.js`, `data/subcities.js`: hand-entered coordinates.
 - `data/regions.js`: continent, study-region and sub-national region membership.
 - `data/iso.js` + `data/flags/*.svg`: ISO alpha-2 codes and 227 flags vendored from the MIT-licensed flag-icons package (4:3).
+- `data/clues.js`: hand-written street-level identification clues for 134 countries and territories with Street View coverage. Shown on study cards and used by the Clues drill.
 
 The world map is simplified to 40% of its vertices at rest and 7% while dragging or animating, so the globe stays smooth.
 

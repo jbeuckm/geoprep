@@ -1,7 +1,7 @@
 {
-  "name": "GeoDrill – MapTap & Globle trainer",
+  "name": "GeoDrill – geography trainer",
   "short_name": "GeoDrill",
-  "description": "Geography drills on a 3D globe: tap places, guess hidden countries, learn borders, states and cities.",
+  "description": "Geography drills on a 3D globe: place countries and cities, hot-and-cold country hunts, borders, flags, states and street-level clues.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>GeoDrill</title>
-<meta name="description" content="Geography drills on a 3D globe for MapTap and Globle: tap places, guess hidden countries, learn borders, states and cities.">
+<meta name="description" content="Geography drills on a 3D globe: place countries and cities, find hidden countries hot-and-cold, learn borders, flags, states and street-level clues.">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#0e131c" media="(prefers-color-scheme: dark)">
@@ -104,6 +104,11 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
 .flagstage{display:flex;justify-content:center;margin:10px 0 14px}
 .flagstage img{width:min(100%,300px);aspect-ratio:4/3;object-fit:cover;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.25)}
 .urow .un{display:flex;align-items:center}
+.clues{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:13px;margin:8px 0}
+.clue{display:contents}
+.clue .ck{color:var(--muted);white-space:nowrap}
+.cluebox{margin-top:8px;font-size:13px}
+.cluebox summary{cursor:pointer;color:var(--muted);font-weight:600}
 #scope select{background:var(--chip);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;font-size:13px;max-width:200px}
 .scopeline{font-size:13px;color:var(--muted);margin:0 0 8px}
 #trainbar:empty{display:none}
@@ -155,6 +160,7 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js" crossorigin="anonymous"></script>
 <script src="data/iso.js"></script>
+<script src="data/clues.js"></script>
 <script src="data/places.js"></script>
 <script src="data/regions.js"></script>
 <script src="data/subcapitals.js"></script>

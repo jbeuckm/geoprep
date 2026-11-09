@@ -1,9 +1,9 @@
 /* GeoDrill service worker: precache the whole app (shell, libraries, map data) so it works offline. */
-const VERSION = 'geodrill-v10';
+const VERSION = 'geodrill-v11';
 importScripts('./data/iso.js');
 const FLAGS = [...new Set(Object.values(self.ISO_A2))].map(c => `./data/flags/${c}.svg`);
 const PRECACHE = [
-  './', './index.html', './app.js', './pwa.js', './manifest.webmanifest', './data/iso.js', ...FLAGS,
+  './', './index.html', './app.js', './pwa.js', './manifest.webmanifest', './data/iso.js', './data/clues.js', ...FLAGS,
   './data/places.js', './data/regions.js', './data/subcapitals.js', './data/subcities.js',
   './data/countries-50m.json',
   './data/admin1/usa.json', './data/admin1/india.json', './data/admin1/china.json', './data/admin1/brazil.json',
