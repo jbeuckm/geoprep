@@ -42,7 +42,11 @@ html,body{height:100dvh}
 header{padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right));padding-top:max(10px,env(safe-area-inset-top))}
 #side{padding-bottom:max(16px,env(safe-area-inset-bottom))}
 #installbtn{display:none}
-#installbtn.show{display:inline-block;background:var(--accent);color:var(--accent-text);border-color:transparent}
+#installbtn.show{display:inline-block}
+a{color:var(--accent)}
+.linkbtn{background:none;border:0;padding:0;color:var(--accent);text-decoration:underline;font:inherit;cursor:pointer}
+#ghints{margin-top:4px;display:grid;gap:2px}
+.btn:focus-visible,.chip:focus-visible,nav button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .toast{position:fixed;left:50%;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,.2);z-index:10;display:flex;gap:10px;align-items:center}
 .toast button{background:var(--accent);color:var(--accent-text);border:0;border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
 header{display:flex;align-items:center;gap:8px;padding:8px 14px;border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -131,13 +135,14 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
   main{grid-template-columns:1fr;grid-template-rows:42vh 1fr}
   #side{border-left:0;border-top:1px solid var(--line)}
   #globe-wrap{min-height:0}
-  header{display:grid;grid-template-columns:1fr auto auto;grid-template-areas:"title stats theme" "nav nav nav" "scope scope scope";row-gap:6px;padding-bottom:8px}
+  header{display:grid;grid-template-columns:1fr auto auto auto;grid-template-areas:"title install stats theme" "nav nav nav nav" "scope scope scope scope";row-gap:6px;column-gap:6px;padding-bottom:8px;min-width:0}
   header h1{grid-area:title}
-  #statsbtn{grid-area:stats} #themebtn{grid-area:theme} #installbtn{display:none !important}
-  nav{grid-area:nav;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;gap:2px}
+  #statsbtn{grid-area:stats} #themebtn{grid-area:theme} #installbtn{grid-area:install}
+  nav{grid-area:nav;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;gap:2px;min-width:0;
+      -webkit-mask-image:linear-gradient(to right,#000 85%,transparent);mask-image:linear-gradient(to right,#000 85%,transparent);padding-right:28px}
   nav::-webkit-scrollbar{display:none}
   nav button{min-height:36px;font-size:14px;padding:6px 10px}
-  #scope{grid-area:scope} #scope select{flex:1;max-width:none;min-height:36px}
+  #scope{grid-area:scope;min-width:0} #scope select{flex:1 1 0;width:0;min-width:0;max-width:none;min-height:36px}
   .spacer{display:none}
 }
 </style>
