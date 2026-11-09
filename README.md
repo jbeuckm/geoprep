@@ -59,6 +59,23 @@ In Study and Explore, the **Aa** button on the globe labels the map: one press n
 
 Every mode records misses per unit in `localStorage`. Units you miss come up more often in all modes, and the **Stats** view maps them green-to-red and lists the weakest.
 
+## Links and sharing
+
+Every view has a link, kept in the address bar as you move around (Back and Forward work):
+
+| Link | Opens |
+|---|---|
+| `#/tap/brazil` | Tap on Brazil |
+| `#/hotcold/world/caribbean` | Hot & Cold, Caribbean scope |
+| `#/borders/usa/west` | Borders on US West |
+| `#/study/india/south?u=kerala` | India South study guide with Kerala's card open |
+| `#/stats/canada` | Stats for Canada |
+| `#/train/locate` | Starts the Locate programme (`hotcold`, `street`, `mixed` also work) |
+
+Mode slugs: `train study explore tap hotcold borders closer nameit flags clues stats`. Level ids: `world usa india china brazil canada australia russia`. Regions are slugified names (`western-europe`, `far-eastern`).
+
+**Share** in the header copies a link to what you are looking at, or opens the phone share sheet. In Tap it shares the round's five questions (planned when the round starts); in Hot & Cold it shares the hidden country; after finishing, your score or guess count rides along and the friend sees it as the score to beat. Answers travel base64-encoded by name, so they are not readable in the URL at a glance (this is not security, just spoiler protection). Old `?level=&region=` links still work.
+
 ## Data
 
 - `data/countries-50m.json`: Natural Earth 1:50m via world-atlas 2.0.2. Somaliland, Northern Cyprus, Western Sahara and Siachen are folded into Somalia, Cyprus, Morocco and India so the border graph matches Globle's country list. Dependencies are drawn but never used as answers.

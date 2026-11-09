@@ -482,6 +482,100 @@ function flyTo(lonlat, zoom, ms = 900) {
     else { G.coarse = true; render(); }
   });
 }
+// ---------- Hash router: every view and every Tap round / Hot & Cold game has a shareable link ----------
+// Routes: #/<mode>/<level>[/<region>][?params]   e.g. #/tap/brazil, #/hotcold/world/caribbean?t=…, #/study/india/south?u=kerala
+//         #/train[/<programme>]   #/stats/<level>
+const MODE_SLUG = { train: 'train', study: 'study', explore: 'explore', tap: 'tap', globle: 'hotcold', neighbors: 'borders', closer: 'closer', nameit: 'nameit', flags: 'flags', clues: 'clues', stats: 'stats' };
+const SLUG_MODE = Object.fromEntries(Object.entries(MODE_SLUG).map(([k, v]) => [v, k]));
+const slugify = t => normalize(t).replace(/ /g, '-');
+let ROUTE = {};        // params from the link being opened, consumed by the mode that starts
+let ROUTING = false;   // true while applying a link, so the address bar keeps its parameters
+const b64e = t => btoa(String.fromCharCode(...new TextEncoder().encode(t))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const b64d = t => new TextDecoder().decode(Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)));
+// Answers travel by name (stable across browsers), base64-encoded so they are not readable at a glance.
+function encodePlan(plan) { return b64e(plan.map(q => q.kind === 'unit' ? 'u:' + q.c.name : 'p:' + q.pl.name).join('\n')); }
+function decodePlan(code) {
+  try {
+    const plan = b64d(code).split('\n').map(tok => {
+      const name = tok.slice(2);
+      if (tok.startsWith('u:')) { const c = CUR.byName.get(name); return c ? { kind: 'unit', c } : null; }
+      const pl = CUR.places.find(x => x.name === name); return pl ? { kind: 'place', pl } : null;
+    });
+    return plan.length && plan.every(Boolean) ? plan.slice(0, 5) : null;
+  } catch (e) { return null; }
+}
+function encodeUnit(u) { return b64e(u.name); }
+function decodeUnit(code) { try { return CUR.byName.get(b64d(code)) || null; } catch (e) { return null; } }
+function routePath() {
+  if (TRAIN.active) return `/train/${TRAIN.program}`;
+  if (mode === 'train') return '/train';
+  const parts = ['', MODE_SLUG[mode] || 'study', CUR.id];
+  if (REGION !== 'All') parts.push(slugify(REGION));
+  return parts.join('/');
+}
+function syncHash() { // a new view gets a new history entry, without game parameters
+  if (ROUTING || !CUR) return;
+  const h = '#' + routePath();
+  if (location.hash.split('?')[0] !== h) history.pushState(null, '', h);
+}
+function cleanHash() { if (!ROUTING && CUR) history.replaceState(null, '', '#' + routePath()); }
+function focusHash(u) { if (!ROUTING && CUR && !TRAIN.active) history.replaceState(null, '', '#' + routePath() + '?u=' + slugify(u.name)); }
+async function applyRoute(hash) {
+  const raw = (hash || '').replace(/^#/, '');
+  if (!raw.startsWith('/')) return false;
+  const [path, query] = raw.split('?');
+  const seg = path.split('/').filter(Boolean), qp = new URLSearchParams(query || '');
+  const m = SLUG_MODE[seg[0]]; if (!m) return false;
+  ROUTING = true;
+  try {
+    trainStop(true);
+    if (m === 'train') {
+      if (seg[1] && PROGRAMS[seg[1]]) { ROUTING = false; trainChoose(seg[1]); }
+      else await setLevel(CUR.id, REGION, 'train');
+      return true;
+    }
+    const lv = LEVEL_DEFS[seg[1]] ? seg[1] : 'world';
+    const L = await loadLevel(lv);
+    const region = seg[2] ? Object.keys(L.regions).find(r => slugify(r) === seg[2]) : null;
+    ROUTE = { q: qp.get('q'), s: qp.get('s'), t: qp.get('t'), g: qp.get('g') };
+    await setLevel(lv, region || 'All', m);
+    const u = qp.get('u') && L.units.find(x => slugify(x.name) === qp.get('u'));
+    if (u && S.focus) S.focus(u);
+    return true;
+  } finally { ROUTING = false; ROUTE = {}; }
+}
+window.addEventListener('popstate', () => {
+  const [path, query] = location.hash.replace(/^#/, '').split('?');
+  if (path === routePath() && !query) return; // already showing this view
+  applyRoute(location.hash);
+});
+function toast(text) {
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = text;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 2600);
+}
+async function shareLink() {
+  const params = new URLSearchParams();
+  let text = `GeoDrill · ${(MODES.find(x => x[0] === mode) || ['', 'Train'])[1]} · ${scopeLabel()}`;
+  if (mode === 'tap' && S.plan && !TRAIN.active) {
+    params.set('q', encodePlan(S.plan));
+    if (S.roundDone) { params.set('s', String(S.total)); text = `I scored ${S.total}/500 on a GeoDrill placement round (${scopeLabel()}). Can you beat it?`; }
+    else text = `Try this GeoDrill placement round (${scopeLabel()}): same five places for both of us.`;
+  } else if (mode === 'globle' && S.target && !TRAIN.active) {
+    params.set('t', encodeUnit(S.target));
+    if (S.done && S.won) { params.set('g', String(S.guesses.length)); text = `I found the hidden ${CUR.def.unit} in ${S.guesses.length} guesses on GeoDrill. Your turn:`; }
+    else text = `Find the hidden ${CUR.def.unit} on GeoDrill (${scopeLabel()}):`;
+  } else if ((mode === 'study' || mode === 'explore') && S.focused) {
+    params.set('u', slugify(S.focused.name)); text = `${S.focused.name} on GeoDrill`;
+  }
+  const url = location.origin + location.pathname + '#' + routePath() + (params.toString() ? '?' + params : '');
+  if (navigator.share && matchMedia('(pointer: coarse)').matches) {
+    try { await navigator.share({ title: 'GeoDrill', text, url }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  try { await navigator.clipboard.writeText(url); toast('Link copied'); }
+  catch (e) { window.prompt('Copy this link:', url); }
+}
+document.getElementById('sharebtn').onclick = () => shareLink();
+
 // ---------- Learning labels: names (and optionally cities) for everything in view ----------
 const LABELS = { level: 0 }; // 0 off, 1 names, 2 names + cities and capitals
 try { LABELS.level = +(localStorage.getItem('geodrill.labels') || 0) || 0; } catch (e) {}
@@ -666,6 +760,7 @@ MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.t
 function setMode(id) {
   mode = id; S = {};
   updateLabelButton();
+  syncHash();
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   [...nav.children].forEach(b => b.classList.toggle('on', b.dataset.id === id));
   resetGlobe(); render();
@@ -856,7 +951,9 @@ function studyStart() {
     const step = () => { tourIdx = (tourIdx + 1) % units.length; showUnit(units[tourIdx]); };
     step(); tourTimer = setInterval(step, 3000);
   };
+  S.focus = showUnit;
   function showUnit(c) {
+    S.focused = c; focusHash(c);
     const pls = CUR.places.filter(pl => pl.units.includes(c));
     G.markers = pls.map(pl => ({ p: pl.p, color: pl.kind === 'capital' ? cssVar('--bad') : pl.kind === 'landmark' ? cssVar('--warn') : cssVar('--text'), r: pl.kind === 'capital' ? 6 : 4, label: pl.name }));
     const fr = frameWithLabels([c], pls.map(pl => pl.p), 0.8, 1.6);
@@ -889,7 +986,9 @@ function explore() {
   const q = document.getElementById('exq');
   q.addEventListener('change', () => { const c = resolveUnit(q.value).unit; if (c) showUnit(c); });
   G.onTap = p => { const c = unitAt(p); if (c) showUnit(c); };
+  S.focus = showUnit;
   function showUnit(c) {
+    S.focused = c; focusHash(c);
     const z = zoomForUnit(c);
     flyTo(c.centroid, z);
     G.markers = contextLabels(c.centroid, z, new Set([c]));
@@ -910,24 +1009,35 @@ function tapStart() {
   S.cats = { unit: true, capital: true, city: true, landmark: false };
   S.round = []; S.q = null; S.n = 5;
   if (!pool().length) return noScope();
+  // A shared link carries the exact five questions; otherwise plan a fresh round now, so it can be shared at any point.
+  S.plan = ROUTE.q ? decodePlan(ROUTE.q) : null;
+  S.shared = S.plan ? { score: ROUTE.s != null && /^\d+$/.test(ROUTE.s) ? Math.min(500, +ROUTE.s) : null } : null;
+  if (!S.plan) S.plan = planTapRound();
   tapNext();
 }
-function tapNext() {
-  resetGlobe(); canvas.classList.add('tap');
-  flyHome(); // each question starts from the whole scope, not zoomed in on the last answer
+function chooseTapQuestion(taken) {
   const units = pool(), places = scopedPlaces(S.cats);
   if (!S.cats.unit && !places.length) S.cats.unit = true;
   let q;
-  const unitShare = places.length ? 0.6 : 1;
-  if (S.cats.unit && Math.random() < unitShare) q = { kind: 'unit', c: pickTarget(units) };
-  else if (places.length) { // choose a unit (weighted) first, then one of its places, so place-rich units do not dominate
-    const byUnit = new Map(); for (const pl of places) for (const u of pl.units) { if (!byUnit.has(u)) byUnit.set(u, []); byUnit.get(u).push(pl); }
-    const u = byUnit.size ? weightedPick([...byUnit.keys()]) : null;
-    q = { kind: 'place', pl: u ? pick(byUnit.get(u)) : pick(places) };
+  for (let tries = 0; tries < 30; tries++) {
+    const unitShare = places.length ? 0.6 : 1;
+    if (S.cats.unit && Math.random() < unitShare) q = { kind: 'unit', c: pickTarget(units) };
+    else if (places.length) { // choose a unit (weighted) first, then one of its places, so place-rich units do not dominate
+      const byUnit = new Map(); for (const pl of places) for (const u of pl.units) { if (!byUnit.has(u)) byUnit.set(u, []); byUnit.get(u).push(pl); }
+      const u = byUnit.size ? weightedPick([...byUnit.keys()]) : null;
+      q = { kind: 'place', pl: u ? pick(byUnit.get(u)) : pick(places) };
+    }
+    else q = { kind: 'unit', c: pickTarget(units) };
+    const dup = taken.some(t => t.kind === q.kind && (q.kind === 'unit' ? t.c === q.c : t.pl === q.pl));
+    if (!dup || units.length + places.length <= 8) break;
   }
-  else q = { kind: 'unit', c: pickTarget(units) };
-  if (units.length + places.length > 8 && S.round.some(r => r.q.kind === q.kind && (q.kind === 'unit' ? r.q.c === q.c : r.q.pl === q.pl))) return tapNext();
-  S.q = q; S.answered = false;
+  return q;
+}
+function planTapRound() { const plan = []; while (plan.length < S.n) plan.push(chooseTapQuestion(plan)); return plan; }
+function tapNext() {
+  resetGlobe(); canvas.classList.add('tap');
+  flyHome(); // each question starts from the whole scope, not zoomed in on the last answer
+  S.q = S.plan[S.round.length] || chooseTapQuestion(S.round.map(r => r.q)); S.answered = false;
   G.onTap = tapAnswer;
   tapRender();
 }
@@ -938,6 +1048,7 @@ function tapRender() {
   const idx = S.round.length + 1;
   panel.innerHTML = `<h2>Tap <span class="muted small">· placement drill</span></h2>
     ${scopeLine()}
+    ${S.shared ? `<div class="sharedbar">🔗 Shared round: the same five questions your friend got${S.shared.score != null ? `. Their score: <b>${S.shared.score}/500</b>` : ''}.</div>` : ''}
     <div class="row small muted"><span>Question ${idx} / ${S.n}</span><span>·</span><span>Round score ${total}</span></div>
     <div class="scorebar"><i style="width:${total / S.n}%"></i></div>
     <div class="prompt">${q.kind === 'unit' ? flagImg(q.c, 'flag big') : ''}${esc(label)}</div>
@@ -954,7 +1065,11 @@ function tapRender() {
     ${coach(['Anchor on coastlines and big shapes first, then count units inward from the edge you know.',
       'For capitals, know which side of the territory they sit on. Many are coastal or near a border.',
       'Zoom in before tapping. A tap inside the border scores full marks, so a careful tap beats a quick one.'])}`;
-  panel.querySelectorAll('input[data-cat]').forEach(cb => cb.onchange = () => { S.cats[cb.dataset.cat] = cb.checked; });
+  panel.querySelectorAll('input[data-cat]').forEach(cb => cb.onchange = () => {
+    S.cats[cb.dataset.cat] = cb.checked;
+    S.plan.length = S.round.length + 1; // keep the current question, re-plan the rest with the new categories
+    while (S.plan.length < S.n) S.plan.push(chooseTapQuestion(S.plan));
+  });
   if (TRAIN.active) trainBar();
   const rc = document.getElementById('revealc'); if (rc) rc.onclick = e => { e.preventDefault(); rc.replaceWith(document.createTextNode(q.pl.where)); };
 }
@@ -1007,15 +1122,21 @@ function tapSummary() {
     <div class="card"><div class="big">${total} / ${S.n * 100}</div><div class="scorebar"><i style="width:${total / S.n}%"></i></div>
     ${S.round.map(r => `<div class="stat"><span>${esc(r.q.kind === 'unit' ? r.q.c.name : r.q.pl.name)}</span><b>${r.score} <span class="muted">(${fmtKm(r.d)})</span></b></div>`).join('')}
     </div>
-    <div class="row"><button class="btn" id="again">New round</button></div>
+    ${S.shared && S.shared.score != null ? `<div class="sharedbar">${total > S.shared.score ? '🏆 You beat your friend' : total === S.shared.score ? '🤝 A tie with your friend' : 'Your friend wins this one'} (they scored ${S.shared.score}/500).</div>` : ''}
+    <div class="row"><button class="btn" id="again">New round</button><button class="btn sec" id="sharer">Share this round${TRAIN.active ? '' : ' and your score'}</button></div>
     ${tapHistory()}`;
-  document.getElementById('again').onclick = () => advance(() => { S.round = []; tapNext(); });
+  S.total = total; S.roundDone = true;
+  document.getElementById('sharer').onclick = () => shareLink();
+  document.getElementById('again').onclick = () => advance(() => { S.round = []; S.shared = null; S.roundDone = false; S.plan = planTapRound(); cleanHash(); tapNext(); });
 }
 
 // ----- Globle -----
 function globleStart() {
   if (!pool().length) return noScope();
-  S.target = pickTarget(pool()); S.guesses = []; S.done = false; S.hintsUsed = 0;
+  const sharedTarget = ROUTE.t ? decodeUnit(ROUTE.t) : null;
+  S.target = sharedTarget && sharedTarget.playable ? sharedTarget : pickTarget(pool());
+  S.shared = sharedTarget ? { guesses: ROUTE.g && /^\d+$/.test(ROUTE.g) ? +ROUTE.g : null } : null;
+  S.guesses = []; S.done = false; S.won = false; S.hintsUsed = 0;
   const nb = S.target.neighbors.size;
   S.hints = [
     ...(REGION === 'All' && S.target.region ? [`Region: ${S.target.region}`] : []),
@@ -1031,6 +1152,7 @@ function globleRender() {
   const games = STATS.globle, avg = games.length ? (games.reduce((a, b) => a + b, 0) / games.length).toFixed(1) : '–';
   panel.innerHTML = `<h2>Hot &amp; Cold <span class="muted small">· hidden ${esc(CUR.def.unit)}</span></h2>
     ${scopeLine()}
+    ${S.shared ? `<div class="sharedbar">🔗 Shared game: the same hidden ${esc(CUR.def.unit)} your friend hunted${S.shared.guesses != null ? `. They found it in <b>${S.shared.guesses}</b> guesses` : ''}.</div>` : ''}
     <p class="sub">A mystery ${esc(CUR.def.unit)} from the scope is hidden. Guess any ${esc(CUR.def.unit)}: the warmer the colour, the closer it is. Bordering ones show darkest red.</p>
     ${S.done ? '' : `<form id="gform"><input type="text" id="gq" placeholder="Type a ${esc(CUR.def.unit)} and press Enter" list="glist" autocomplete="off"></form>
     <datalist id="glist">${CUR.playable.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>
@@ -1051,7 +1173,7 @@ function globleRender() {
     document.getElementById('ghint').onclick = () => { if (S.hintsUsed >= S.hints.length) return; S.hintsUsed++; globleRender(); };
     if (S.hintsUsed) document.getElementById('ghints').innerHTML = S.hints.slice(0, S.hintsUsed).map(h => `<div>💡 ${esc(h)}</div>`).join('');
   }
-  const n = document.getElementById('gnew'); if (n) n.onclick = () => advance(() => { resetGlobe(); globleStart(); });
+  const n = document.getElementById('gnew'); if (n) n.onclick = () => advance(() => { resetGlobe(); cleanHash(); globleStart(); });
   G.fill = c => { if (c.level !== CUR.id) return null; const g = S.guesses.find(x => x.c === c); if (g) return c === S.target ? cssVar('--ok') : globleColor(g.d); if (S.done && c === S.target) return cssVar('--ok'); return null; };
   render();
 }
@@ -1074,7 +1196,7 @@ function globleGuess(text) {
   m.textContent = d === 0 ? `${c.name} borders the mystery ${CUR.def.unit}.` : `${c.name} is ${fmtKm(d)} away.`;
 }
 function globleEnd(won) {
-  S.done = true;
+  S.done = true; S.won = won;
   if (won) STATS.globle.push(S.guesses.length);
   mark(S.target, !won || S.guesses.length > 8); save();
   globleRender();
@@ -1084,8 +1206,11 @@ function globleEnd(won) {
   setTimeout(() => revealFeedback('#gres'), 50);
   G.hover = true;
   const nbs = [...S.target.neighbors].sort();
+  setTimeout(() => { const b = document.getElementById('gshare'); if (b) b.onclick = () => shareLink(); }, 0);
   document.getElementById('gres').innerHTML = `<div class="card ${won ? 'ok' : 'bad'}"><div class="big">${won ? `Solved in ${S.guesses.length}` : 'Gave up'}</div>
     <div>It was ${flagImg(S.target)}<b>${esc(S.target.name)}</b>${S.target.region ? ' (' + esc(S.target.region) + ')' : ''}.</div>
+    ${S.shared && S.shared.guesses != null && won ? `<div style="margin-top:4px">${S.guesses.length < S.shared.guesses ? '🏆 Fewer guesses than your friend' : S.guesses.length === S.shared.guesses ? '🤝 Same as your friend' : 'Your friend was quicker'} (${S.shared.guesses}).</div>` : ''}
+    <div style="margin-top:8px"><button class="btn sec" id="gshare">${won ? 'Challenge a friend' : 'Share this game'}</button></div>
     <div class="small muted" style="margin-top:4px">Borders: ${nbs.length ? nbs.map(esc).join(', ') : 'none'}</div></div>`;
 }
 
@@ -1367,7 +1492,7 @@ function cluesAnswer(i) {
 // ----- Stats -----
 document.getElementById('statsbtn').onclick = () => openStats();
 function openStats() {
-  resetGlobe(); G.hover = true; [...nav.children].forEach(b => b.classList.remove('on')); mode = 'stats'; updateLabelButton();
+  resetGlobe(); G.hover = true; [...nav.children].forEach(b => b.classList.remove('on')); mode = 'stats'; updateLabelButton(); syncHash();
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   const rows = Object.entries(STATS.units).filter(([, v]) => v.seen >= 2 && v.miss > 0).map(([k, v]) => ({ k, rate: v.miss / v.seen, ...v })).sort((a, b) => b.rate - a.rate || b.seen - a.seen);
   const weak = rows.slice(0, 20);
@@ -1407,17 +1532,20 @@ try { const th = localStorage.getItem('geodrill.theme'); if (th) document.docume
 loadLevel('world').then(w => {
   WORLD = w; CUR = w;
   resize();
-  const params = new URLSearchParams(location.search);
-  const lv = LEVEL_DEFS[params.get('level')] ? params.get('level') : 'world';
-  const deep = params.has('level') || params.has('region');
-  return setLevel(lv, params.get('region') || 'All', deep ? 'study' : 'train');
+  return applyRoute(location.hash).then(routed => {
+    if (routed) return;
+    const params = new URLSearchParams(location.search);
+    const lv = LEVEL_DEFS[params.get('level')] ? params.get('level') : 'world';
+    const deep = params.has('level') || params.has('region');
+    return setLevel(lv, params.get('region') || 'All', deep ? 'study' : 'train');
+  });
 }).then(() => {
   // Test/automation hook: lets a script "tap" at a latitude/longitude it believes is right, and inspect state.
   window.__geo = {
     levels: LEVEL_DEFS, get level() { return CUR; }, get world() { return WORLD; }, get region() { return REGION; }, get mode() { return mode; },
     pool, unitDist, findUnit, unitAt, pointToUnitDist, setMode, setLevel,
     tapLatLon(lat, lon) { if (!G.onTap) return false; G.onTap([lon, lat]); return true; },
-    render, get G() { return G; }, get TRAIN() { return TRAIN; },
+    render, get G() { return G; }, get TRAIN() { return TRAIN; }, applyRoute, routePath, shareLink,
   };
 }).catch(err => { document.getElementById('loading').textContent = 'Could not load map data: ' + err; console.error(err); });
 })();

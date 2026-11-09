@@ -118,6 +118,7 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
 #scope select{background:var(--chip);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:5px 6px;font:inherit;font-size:12.5px;max-width:170px}
 .scopeline{font-size:13px;color:var(--muted);margin:0 0 8px}
 #trainbar:empty{display:none}
+.sharedbar{border:1px dashed var(--accent);border-radius:8px;padding:8px 10px;margin:6px 0 10px;font-size:13px;background:color-mix(in srgb,var(--accent) 8%,var(--panel))}
 #trainbar{border:1px solid var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--panel));border-radius:10px;padding:10px 12px;margin:0 0 14px;font-size:14px}
 #trainbar .tbt{font-weight:650}
 #trainbar .row{margin-top:8px}
@@ -137,9 +138,9 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
   main{grid-template-columns:1fr;grid-template-rows:42vh 1fr}
   #side{border-left:0;border-top:1px solid var(--line)}
   #globe-wrap{min-height:0}
-  header{display:grid;grid-template-columns:1fr auto auto auto;grid-template-areas:"title install stats theme" "nav nav nav nav" "scope scope scope scope";row-gap:6px;column-gap:6px;padding-bottom:8px;min-width:0}
+  header{display:grid;grid-template-columns:1fr auto auto auto auto;grid-template-areas:"title install share stats theme" "nav nav nav nav nav" "scope scope scope scope scope";row-gap:6px;column-gap:6px;padding-bottom:8px;min-width:0}
   header h1{grid-area:title}
-  #statsbtn{grid-area:stats} #themebtn{grid-area:theme} #installbtn{grid-area:install}
+  #statsbtn{grid-area:stats} #themebtn{grid-area:theme} #installbtn{grid-area:install} #sharebtn{grid-area:share}
   nav{grid-area:nav;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;gap:2px;min-width:0;
       -webkit-mask-image:linear-gradient(to right,#000 85%,transparent);mask-image:linear-gradient(to right,#000 85%,transparent);padding-right:28px}
   nav::-webkit-scrollbar{display:none}
@@ -156,6 +157,7 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
   <span class="spacer"></span>
   <div id="scope"><select id="level" title="Level"></select><select id="region" title="Region"></select></div>
   <button class="iconbtn" id="installbtn" title="Install GeoDrill as an app">Install</button>
+  <button class="iconbtn" id="sharebtn" title="Copy a link to this view or game">Share</button>
   <button class="iconbtn" id="statsbtn">Stats</button>
   <button class="iconbtn" id="themebtn" title="Toggle theme">◐</button>
 </header>
