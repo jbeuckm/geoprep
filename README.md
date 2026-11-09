@@ -16,6 +16,16 @@ Opening `index.html` directly also works for the world level: the app falls back
 
 Deep links: `index.html?level=india&region=South`, `?level=russia&region=Far%20Eastern`, `?level=world&region=South%20Pacific`.
 
+## Train (default)
+
+The landing screen asks one question: **MapTap**, **Globle**, or **Both**. The app then runs sets of five questions (or one Tap round or Globle game), choosing the topic and drill itself:
+
+- Topics are the study regions and sub-national regions. Each is weighted by `(misses + 1) / (seen + 2)`, so unseen topics are sampled early and mastered ones fade. The last topic is down-weighted to avoid ruts.
+- A set with 40%+ misses triggers a **review**: the study guide opens on that topic, then the same topic is quizzed again. After one review-and-retry the programme moves on; the topic's miss rate brings it back later.
+- **Skip topic** and **Stop** sit in the training bar. Touching the nav or the dropdowns stops the programme and hands control back.
+
+Everything below is the manual mode, for people who want to steer.
+
 ## Levels and scope
 
 Two dropdowns in the header set what every mode uses:

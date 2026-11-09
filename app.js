@@ -85,6 +85,7 @@ function save() { try { localStorage.setItem(STORE, JSON.stringify(STATS)); } ca
 function mark(unit, missed) {
   const c = STATS.units[unit.key] || (STATS.units[unit.key] = { seen: 0, miss: 0, name: unit.name, level: unit.level });
   c.seen++; if (missed) c.miss++; save();
+  if (TRAIN.active) { TRAIN.setSeen++; if (missed) TRAIN.setMiss++; }
 }
 // Weighted random: unseen and often-missed units come up more.
 function weightOf(unit) {
@@ -517,35 +518,137 @@ async function loadLevel(id) {
   LEVELS[id] = buildLevel(id, topo);
   return LEVELS[id];
 }
-async function setLevel(id, region = 'All') {
+async function setLevel(id, region = 'All', modeId = null) {
   document.getElementById('loading').style.display = 'flex';
   CUR = await loadLevel(id); REGION = region;
   document.getElementById('loading').style.display = 'none';
   levelSel.value = id; fillRegionSelect();
   distCache.clear();
-  setMode(mode || 'study');
+  setMode(modeId || mode || 'study');
   flyHome();
 }
-levelSel.onchange = () => setLevel(levelSel.value);
-regionSel.onchange = () => { REGION = regionSel.value; setMode(mode); flyHome(); };
+levelSel.onchange = () => { trainStop(true); setLevel(levelSel.value); };
+regionSel.onchange = () => { trainStop(true); REGION = regionSel.value; setMode(mode); flyHome(); };
 function scopeLabel() { return (REGION === 'All' ? CUR.def.label.split(' · ')[0] : REGION); }
 
 // ---------- Modes ----------
 const panel = document.getElementById('panel');
-const MODES = [['study', 'Study'], ['explore', 'Explore'], ['tap', 'Tap'], ['globle', 'Globle'], ['neighbors', 'Borders'], ['closer', 'Closer'], ['nameit', 'Name It'], ['flags', 'Flags']];
+const MODES = [['train', 'Train'], ['study', 'Study'], ['explore', 'Explore'], ['tap', 'Tap'], ['globle', 'Globle'], ['neighbors', 'Borders'], ['closer', 'Closer'], ['nameit', 'Name It'], ['flags', 'Flags']];
 let mode = null, S = {}, tourTimer = null;
 const nav = document.getElementById('nav');
-MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => setMode(id); nav.appendChild(b); });
+MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => { if (id !== 'train') trainStop(true); setMode(id); }; nav.appendChild(b); });
 function setMode(id) {
   mode = id; S = {};
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   [...nav.children].forEach(b => b.classList.toggle('on', b.dataset.id === id));
   resetGlobe(); render();
-  ({ study: studyStart, explore, tap: tapStart, globle: globleStart, neighbors: neighborsStart, closer: closerStart, nameit: nameitStart, flags: flagsStart })[id]();
+  ({ train: trainLanding, study: studyStart, explore, tap: tapStart, globle: globleStart, neighbors: neighborsStart, closer: closerStart, nameit: nameitStart, flags: flagsStart })[id]();
 }
 function coach(items) { return `<div class="coach"><b>Coach</b><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`; }
 function scopeLine() { return `<div class="scopeline">Scope: <b>${esc(scopeLabel())}</b> · ${pool().length} ${esc(CUR.def.units)}</div>`; }
 function noScope() { panel.innerHTML = `<h2>Nothing in scope</h2><p class="sub">This region has no playable ${esc(CUR.def.units)}. Pick another region above.</p>`; return true; }
+
+// ----- Train: adaptive programme -----
+const TRAIN = { active: false, program: null, topic: null, lastTopic: null, lastMode: null, remaining: 0, setSeen: 0, setMiss: 0, phase: 'run', sets: 0 };
+const PROGRAMS = {
+  maptap: { label: 'MapTap', blurb: 'Tap places, name shapes, flags', levels: 'all', modes: { world: { tap: .5, nameit: .3, flags: .2 }, sub: { tap: .6, nameit: .4 } } },
+  globle: { label: 'Globle', blurb: 'Hidden country, borders, distances', levels: 'world', modes: { world: { globle: .4, neighbors: .4, closer: .2 }, sub: { neighbors: .6, closer: .4 } } },
+  mixed:  { label: 'Both', blurb: 'Everything, weighted to your misses', levels: 'all', modes: { world: { tap: .3, nameit: .2, flags: .1, globle: .15, neighbors: .15, closer: .1 }, sub: { tap: .35, nameit: .25, globle: .15, neighbors: .15, closer: .1 } } },
+};
+function trainTopics(program) {
+  const out = [];
+  for (const r of Object.keys(window.WORLD_REGIONS)) out.push({ level: 'world', region: r, label: r, keys: window.WORLD_REGIONS[r].map(n => 'world:' + n) });
+  if (PROGRAMS[program].levels === 'all') {
+    for (const [id, regs] of Object.entries(window.LEVEL_REGIONS)) {
+      const name = LEVEL_DEFS[id].label.split(' · ')[0];
+      if (Object.keys(regs).length) for (const r of Object.keys(regs)) out.push({ level: id, region: r, label: `${name}: ${r}`, keys: regs[r].map(n => id + ':' + n) });
+      else out.push({ level: id, region: 'All', label: name, keys: (window.SUBCAPITALS[id] || []).map(p => id + ':' + p[0]) });
+    }
+  }
+  return out;
+}
+function topicStats(t) {
+  let seen = 0, miss = 0;
+  for (const k of t.keys) { const u = STATS.units[k]; if (u) { seen += u.seen; miss += u.miss; } }
+  return { seen, miss, weight: (miss + 1) / (seen + 2) }; // unseen topics start at 0.5 so coverage happens; mastered topics fade
+}
+function pickTopic(program) {
+  const scored = trainTopics(program).map(t => ({ t, ...topicStats(t) }));
+  for (const x of scored) if (TRAIN.lastTopic && x.t.label === TRAIN.lastTopic.label) x.weight *= 0.4;
+  scored.sort((a, b) => b.weight - a.weight);
+  const top = scored.slice(0, 5); let r = Math.random() * top.reduce((a, x) => a + x.weight, 0);
+  for (const x of top) { r -= x.weight; if (r <= 0) return x; }
+  return top[0];
+}
+function pickMode(program, level) {
+  const table = PROGRAMS[program].modes[level === 'world' ? 'world' : 'sub'];
+  const entries = Object.entries(table).filter(([m]) => !(m === TRAIN.lastMode && Object.keys(table).length > 1));
+  let r = Math.random() * entries.reduce((a, [, w]) => a + w, 0);
+  for (const [m, w] of entries) { r -= w; if (r <= 0) return m; }
+  return entries[0][0];
+}
+function weakestNow(n = 3) {
+  return trainTopics('mixed').map(t => ({ t, ...topicStats(t) })).filter(x => x.seen >= 3 && x.miss > 0).sort((a, b) => b.miss / b.seen - a.miss / a.seen).slice(0, n);
+}
+function trainLanding() {
+  TRAIN.active = false; trainBar();
+  let saved = null; try { saved = localStorage.getItem('geodrill.program'); } catch (e) {}
+  const weak = weakestNow();
+  panel.innerHTML = `<h2>Train</h2>
+    <p class="sub">Pick what you're practising for. The app chooses the topics and drills, doubles down where you miss, and moves on when you're solid. No settings needed.</p>
+    <div class="bigopts">${Object.entries(PROGRAMS).map(([id, p]) => `<button data-p="${id}"><b>${p.label}${saved === id ? ' <span class="muted small">· continue</span>' : ''}</b><small>${p.blurb}</small></button>`).join('')}</div>
+    ${weak.length ? `<div class="small"><b>Where you've struggled:</b> ${weak.map(x => `${esc(x.t.label)} (${Math.round(100 * x.miss / x.seen)}% missed)`).join(', ')}</div>` : '<div class="small muted">No history yet. The first sets sample widely to find your weak spots.</div>'}
+    <div class="small muted" style="margin-top:14px">Prefer to steer yourself? Use Study and the level/region dropdowns. Sets are 5 questions, or one Tap round or Globle game.</div>`;
+  panel.querySelectorAll('.bigopts button').forEach(b => b.onclick = () => trainChoose(b.dataset.p));
+}
+function trainChoose(program) {
+  TRAIN.active = true; TRAIN.program = program; TRAIN.sets = 0; TRAIN.lastTopic = null; TRAIN.lastMode = null; TRAIN.reviewed = false;
+  try { localStorage.setItem('geodrill.program', program); } catch (e) {}
+  trainNextSet();
+}
+function trainStop(silent) {
+  if (!TRAIN.active) return;
+  TRAIN.active = false; TRAIN.phase = 'run'; trainBar();
+  if (!silent) setMode('train');
+}
+async function trainRunSet(topic) {
+  TRAIN.topic = topic; TRAIN.phase = 'run'; TRAIN.sets++;
+  const m = pickMode(TRAIN.program, topic.level);
+  TRAIN.lastMode = m; TRAIN.remaining = (m === 'tap' || m === 'globle') ? 1 : 5; TRAIN.setSeen = 0; TRAIN.setMiss = 0;
+  await setLevel(topic.level, topic.region, m);
+  TRAIN.lastTopic = topic;
+  trainBar();
+}
+async function trainNextSet() {
+  const weak = TRAIN.setSeen >= 3 && TRAIN.setMiss / TRAIN.setSeen >= 0.4;
+  if (weak && !TRAIN.reviewed) { // double down: review this topic, then quiz it again
+    TRAIN.reviewed = true; TRAIN.phase = 'review';
+    await setLevel(TRAIN.topic.level, TRAIN.topic.region, 'study');
+    trainBar(); return;
+  }
+  // After a review-and-retry the programme moves on even if still weak; the topic's miss rate keeps it coming back.
+  TRAIN.reviewed = false;
+  trainRunSet(pickTopic(TRAIN.program).t);
+}
+function advance(fn) {
+  if (!TRAIN.active) return fn();
+  TRAIN.remaining--;
+  if (TRAIN.remaining > 0) { fn(); trainBar(); } else trainNextSet();
+}
+function trainBar() {
+  const el = document.getElementById('trainbar');
+  if (!TRAIN.active || !TRAIN.topic) { el.innerHTML = ''; return; }
+  const st = topicStats(TRAIN.topic), p = PROGRAMS[TRAIN.program];
+  const reason = TRAIN.phase === 'review' ? `You missed ${TRAIN.setMiss} of ${TRAIN.setSeen} here. Have a look, then try it again.`
+    : st.seen === 0 ? 'New ground: sampling it to see how you do.' : `${st.miss} of ${st.seen} missed here so far.`;
+  const modeLabel = (MODES.find(m => m[0] === mode) || [])[1] || '';
+  el.innerHTML = `<div class="tbt">Training for ${esc(p.label)} · set ${TRAIN.sets}${TRAIN.phase === 'review' ? ' · review' : ` · ${esc(modeLabel)}${TRAIN.remaining > 1 ? ` (${TRAIN.remaining} left)` : ''}`}</div>
+    <div>${esc(TRAIN.topic.label)} <span class="muted">· ${reason}</span></div>
+    <div class="row">${TRAIN.phase === 'review' ? '<button class="btn" id="tbquiz">Quiz me again</button>' : '<button class="btn sec" id="tbskip">Skip topic</button>'}<button class="btn sec" id="tbstop">Stop</button></div>`;
+  const q = document.getElementById('tbquiz'); if (q) q.onclick = () => trainRunSet(TRAIN.topic);
+  const sk = document.getElementById('tbskip'); if (sk) sk.onclick = () => { TRAIN.setSeen = 0; TRAIN.setMiss = 0; TRAIN.reviewed = false; trainNextSet(); };
+  document.getElementById('tbstop').onclick = () => trainStop(false);
+}
 
 // ----- Study guide -----
 function studyStart() {
@@ -722,7 +825,7 @@ function tapSummary() {
     </div>
     <div class="row"><button class="btn" id="again">New round</button></div>
     ${tapHistory()}`;
-  document.getElementById('again').onclick = () => { S.round = []; tapNext(); };
+  document.getElementById('again').onclick = () => advance(() => { S.round = []; tapNext(); });
 }
 
 // ----- Globle -----
@@ -756,7 +859,7 @@ function globleRender() {
     document.getElementById('ggive').onclick = () => globleEnd(false);
     document.getElementById('ghint').onclick = () => { document.getElementById('gmsg').textContent = 'Region: ' + (S.target.region || 'n/a'); };
   }
-  const n = document.getElementById('gnew'); if (n) n.onclick = () => { resetGlobe(); globleStart(); };
+  const n = document.getElementById('gnew'); if (n) n.onclick = () => advance(() => { resetGlobe(); globleStart(); });
   G.fill = c => { if (c.level !== CUR.id) return null; const g = S.guesses.find(x => x.c === c); if (g) return c === S.target ? cssVar('--ok') : globleColor(g.d); if (S.done && c === S.target) return cssVar('--ok'); return null; };
   render();
 }
@@ -826,7 +929,7 @@ function neighborsRender() {
     if (n === '__none') { S.sel.clear(); S.sel.add('__none'); } else { S.sel.delete('__none'); S.sel.has(n) ? S.sel.delete(n) : S.sel.add(n); } neighborsRender(); });
   const ck = document.getElementById('nbcheck'); if (ck) ck.onclick = neighborsCheck;
   const sk = document.getElementById('nbskip'); if (sk) sk.onclick = () => { resetGlobe(); neighborsStart(); };
-  const nx = document.getElementById('nbnext'); if (nx) nx.onclick = () => { resetGlobe(); neighborsStart(); };
+  const nx = document.getElementById('nbnext'); if (nx) nx.onclick = () => advance(() => { resetGlobe(); neighborsStart(); });
 }
 function neighborsCheck() {
   S.checked = true;
@@ -902,7 +1005,7 @@ function closerAnswer(k) {
     <div class="stat"><span>${esc(S.a.name)}</span><b>${S.da === 0 ? 'borders' : fmtKm(S.da)}</b></div>
     <div class="stat"><span>${esc(S.b.name)}</span><b>${S.db === 0 ? 'borders' : fmtKm(S.db)}</b></div>
     <div style="margin-top:8px"><button class="btn" id="cnext">Next</button></div></div>`;
-  document.getElementById('cnext').onclick = () => { resetGlobe(); closerStart(); };
+  document.getElementById('cnext').onclick = () => advance(() => { resetGlobe(); closerStart(); });
   render();
 }
 
@@ -943,7 +1046,7 @@ function nameitAnswer(i) {
   document.getElementById('nfb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${flagImg(S.t, 'flag big')}${correct ? 'Correct' : 'It was ' + esc(S.t.name)}</div>
     <div class="small muted">${esc(S.t.region || '')}${S.t.capital ? ' · Capital: ' + esc(S.t.capital) : ''}${nbs.length ? ' · Borders: ' + nbs.map(esc).join(', ') : ' · No land borders'}</div>
     <div style="margin-top:8px"><button class="btn" id="nnext">Next</button></div></div>`;
-  document.getElementById('nnext').onclick = () => { resetGlobe(); nameitStart(); };
+  document.getElementById('nnext').onclick = () => advance(() => { resetGlobe(); nameitStart(); });
   render();
 }
 
@@ -989,7 +1092,7 @@ function flagsAnswer(i) {
   document.getElementById('ffb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${correct ? 'Correct' : 'It was ' + esc(S.t.name)}</div>
     <div class="small muted">${esc(S.t.region || '')}${S.t.capital ? ' · Capital: ' + esc(S.t.capital) : ''}${nbs.length ? ' · Borders: ' + nbs.map(esc).join(', ') : ' · No land borders'}</div>
     <div style="margin-top:8px"><button class="btn" id="fnext">Next</button></div></div>`;
-  document.getElementById('fnext').onclick = () => { resetGlobe(); flagsStart(); };
+  document.getElementById('fnext').onclick = () => advance(() => { resetGlobe(); flagsStart(); });
   render();
 }
 
@@ -1030,14 +1133,15 @@ loadLevel('world').then(w => {
   resize();
   const params = new URLSearchParams(location.search);
   const lv = LEVEL_DEFS[params.get('level')] ? params.get('level') : 'world';
-  return setLevel(lv, params.get('region') || 'All');
+  const deep = params.has('level') || params.has('region');
+  return setLevel(lv, params.get('region') || 'All', deep ? 'study' : 'train');
 }).then(() => {
   // Test/automation hook: lets a script "tap" at a latitude/longitude it believes is right, and inspect state.
   window.__geo = {
     levels: LEVEL_DEFS, get level() { return CUR; }, get world() { return WORLD; }, get region() { return REGION; }, get mode() { return mode; },
     pool, unitDist, findUnit, unitAt, pointToUnitDist, setMode, setLevel,
     tapLatLon(lat, lon) { if (!G.onTap) return false; G.onTap([lon, lat]); return true; },
-    render, get G() { return G; },
+    render, get G() { return G; }, get TRAIN() { return TRAIN; },
   };
 }).catch(err => { document.getElementById('loading').textContent = 'Could not load map data: ' + err; console.error(err); });
 })();

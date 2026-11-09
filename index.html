@@ -40,7 +40,7 @@ html,body{height:100%;margin:0}
 body{background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;display:flex;flex-direction:column;touch-action:manipulation;-webkit-tap-highlight-color:transparent;overscroll-behavior:none}
 html,body{height:100dvh}
 header{padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right));padding-top:max(10px,env(safe-area-inset-top))}
-#panel{padding-bottom:max(16px,env(safe-area-inset-bottom))}
+#side{padding-bottom:max(16px,env(safe-area-inset-bottom))}
 #installbtn{display:none}
 #installbtn.show{display:inline-block;background:var(--accent);color:var(--accent-text);border-color:transparent}
 .toast{position:fixed;left:50%;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,.2);z-index:10;display:flex;gap:10px;align-items:center}
@@ -60,7 +60,7 @@ canvas.tap{cursor:crosshair}
 #tip{position:absolute;pointer-events:none;background:var(--panel);color:var(--text);border:1px solid var(--line);padding:4px 8px;border-radius:6px;font-size:13px;transform:translate(12px,12px);display:none;box-shadow:0 2px 8px rgba(0,0,0,.15)}
 #gctl{position:absolute;right:12px;bottom:12px;display:flex;flex-direction:column;gap:6px}
 #gctl button{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;font-size:16px}
-#panel{border-left:1px solid var(--line);background:var(--panel);padding:16px;overflow:auto}
+#side{border-left:1px solid var(--line);background:var(--panel);padding:16px;overflow:auto}
 #panel h2{font-size:16px;margin:0 0 6px}
 .sub{color:var(--muted);font-size:13px;margin:0 0 12px}
 .prompt{font-size:26px;font-weight:650;margin:8px 0 2px;line-height:1.2}
@@ -106,6 +106,15 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
 .urow .un{display:flex;align-items:center}
 #scope select{background:var(--chip);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;font-size:13px;max-width:200px}
 .scopeline{font-size:13px;color:var(--muted);margin:0 0 8px}
+#trainbar:empty{display:none}
+#trainbar{border:1px solid var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--panel));border-radius:10px;padding:10px 12px;margin:0 0 14px;font-size:14px}
+#trainbar .tbt{font-weight:650}
+#trainbar .row{margin-top:8px}
+.bigopts{display:grid;gap:10px;margin:14px 0}
+.bigopts button{text-align:left;padding:14px 16px;border-radius:12px;border:1px solid var(--line);background:var(--chip);color:var(--text);font:inherit;cursor:pointer}
+.bigopts button b{display:block;font-size:18px;margin-bottom:2px}
+.bigopts button small{color:var(--muted);font-size:13px}
+.bigopts button:hover{border-color:var(--accent);background:var(--chip-on)}
 .ulist{margin:8px 0;max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
 .ugroup{position:sticky;top:0;background:var(--panel);padding:6px 10px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);border-bottom:1px solid var(--line)}
 .urow{display:grid;grid-template-columns:1fr auto auto;gap:8px;padding:6px 10px;cursor:pointer;font-size:14px;border-bottom:1px dashed var(--line)}
@@ -114,7 +123,7 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
 .urow .uc{font-size:13px}
 @media (max-width:860px){
   main{grid-template-columns:1fr;grid-template-rows:55vh 1fr}
-  #panel{border-left:0;border-top:1px solid var(--line)}
+  #side{border-left:0;border-top:1px solid var(--line)}
   #globe-wrap{min-height:0}
 }
 </style>
@@ -140,7 +149,7 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
     </div>
     <div id="loading">Loading map…</div>
   </section>
-  <aside id="panel"></aside>
+  <aside id="side"><div id="trainbar"></div><div id="panel"></div></aside>
 </main>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js" crossorigin="anonymous"></script>
