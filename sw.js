@@ -1,5 +1,5 @@
 /* GeoDrill service worker: precache the whole app (shell, libraries, map data) so it works offline. */
-const VERSION = 'geodrill-v18';
+const VERSION = 'geodrill-v20';
 importScripts('./data/iso.js');
 const FLAGS = [...new Set(Object.values(self.ISO_A2))].map(c => `./data/flags/${c}.svg`);
 const PRECACHE = [
@@ -14,7 +14,9 @@ const PRECACHE = [
 ];
 
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(VERSION).then(c => c.addAll(PRECACHE)).then(() => self.skipWaiting()));
+  // cache:'reload' bypasses the browser's HTTP cache, so a new version never precaches stale copies of the app.
+  const reqs = PRECACHE.map(u => new URL(u, self.location).origin === self.location.origin ? new Request(u, { cache: 'reload' }) : u);
+  e.waitUntil(caches.open(VERSION).then(c => c.addAll(reqs)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== VERSION).map(k => caches.delete(k)))).then(() => self.clients.claim()));

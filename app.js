@@ -98,14 +98,32 @@ function weightOf(unit) {
   if (!c) return 2.0;
   return 1 + 3 * (c.miss / c.seen) + (c.seen < 2 ? 0.8 : 0);
 }
-const RECENT = {}; // mode+level -> recent target keys, to avoid immediate repeats
-function pickTarget(list) {
-  const key = mode + ':' + (CUR ? CUR.id : '');
-  const rec = RECENT[key] || (RECENT[key] = []);
-  const avoid = new Set(rec.slice(-Math.min(8, list.length - 1)));
-  const cands = list.filter(u => !avoid.has(u.key));
+// Recently asked items per mode+level. Each entry records the item key and its normalized name, so a state and
+// its same-named capital (São Paulo, Rio de Janeiro, Moscow) count as the same prompt.
+// Kept in localStorage so a reload (or reopening the app) does not bring recent questions straight back.
+const RECENT = (() => { try { const r = JSON.parse(localStorage.getItem('geodrill.recent')); return r && typeof r === 'object' ? r : {}; } catch (e) { return {}; } })();
+function saveRecent() { try { localStorage.setItem('geodrill.recent', JSON.stringify(RECENT)); } catch (e) {} } // small; save at once so a reload loses nothing
+function recentList() { const k = mode + ':' + (CUR ? CUR.id : ''); return RECENT[k] || (RECENT[k] = []); }
+// No repeat until about half the pool has been asked: at least 5 questions, at most 30 (so misses can still come
+// back to be re-drilled in big scopes), and never the whole pool.
+function recentWindow(n) { return Math.max(0, Math.min(n - 1, Math.max(5, Math.min(30, Math.floor(n * 0.5))))); }
+function avoidSet(n) {
+  const out = new Set();
+  for (const e of recentList().slice(-recentWindow(n))) { out.add(e.key); out.add(e.name); }
+  return out;
+}
+function isRecent(avoid, key, name) { return avoid.has(key) || avoid.has(normalize(name)); }
+function remember(key, name) {
+  const rec = recentList(); rec.push({ key, name: normalize(name) });
+  if (rec.length > 60) rec.splice(0, rec.length - 60); // the window never exceeds 30, so 60 is plenty
+  saveRecent();
+}
+// Pick a unit, weighted toward misses, skipping recent ones. commit=false lets retry loops look without recording.
+function pickTarget(list, commit = true) {
+  const avoid = avoidSet(list.length);
+  const cands = list.filter(u => !isRecent(avoid, u.key, u.name));
   const u = weightedPick(cands.length ? cands : list);
-  rec.push(u.key); if (rec.length > 50) rec.shift();
+  if (commit) remember(u.key, u.name);
   return u;
 }
 function weightedPick(list) {
@@ -1015,22 +1033,34 @@ function tapStart() {
   if (!S.plan) S.plan = planTapRound();
   tapNext();
 }
+const tapKey = q => q.kind === 'unit' ? q.c.key : 'place:' + CUR.id + ':' + q.pl.name;
+const tapName = q => q.kind === 'unit' ? q.c.name : q.pl.name;
 function chooseTapQuestion(taken) {
   const units = pool(), places = scopedPlaces(S.cats);
   if (!S.cats.unit && !places.length) S.cats.unit = true;
-  let q;
-  for (let tries = 0; tries < 30; tries++) {
+  const avoid = avoidSet(units.length + places.length);
+  const takenNames = new Set(taken.map(t => normalize(tapName(t))));
+  const fresh = q => !takenNames.has(normalize(tapName(q))) && !isRecent(avoid, tapKey(q), tapName(q));
+  let q = null, fallback = null;
+  for (let tries = 0; tries < 30 && !q; tries++) {
+    let c;
     const unitShare = places.length ? 0.6 : 1;
-    if (S.cats.unit && Math.random() < unitShare) q = { kind: 'unit', c: pickTarget(units) };
-    else if (places.length) { // choose a unit (weighted) first, then one of its places, so place-rich units do not dominate
-      const byUnit = new Map(); for (const pl of places) for (const u of pl.units) { if (!byUnit.has(u)) byUnit.set(u, []); byUnit.get(u).push(pl); }
+    if (S.cats.unit && Math.random() < unitShare) c = { kind: 'unit', c: pickTarget(units, false) };
+    else if (places.length) { // choose a unit (weighted) first, then one of its fresh places, so place-rich units do not dominate
+      const byUnit = new Map();
+      for (const pl of places) {
+        if (isRecent(avoid, 'place:' + CUR.id + ':' + pl.name, pl.name)) continue;
+        for (const u of pl.units) { if (!byUnit.has(u)) byUnit.set(u, []); byUnit.get(u).push(pl); }
+      }
       const u = byUnit.size ? weightedPick([...byUnit.keys()]) : null;
-      q = { kind: 'place', pl: u ? pick(byUnit.get(u)) : pick(places) };
+      c = { kind: 'place', pl: u ? pick(byUnit.get(u)) : pick(places) };
     }
-    else q = { kind: 'unit', c: pickTarget(units) };
-    const dup = taken.some(t => t.kind === q.kind && (q.kind === 'unit' ? t.c === q.c : t.pl === q.pl));
-    if (!dup || units.length + places.length <= 8) break;
+    else c = { kind: 'unit', c: pickTarget(units, false) };
+    fallback = fallback || c;
+    if (fresh(c)) q = c;
   }
+  q = q || fallback;
+  remember(tapKey(q), tapName(q)); // only the question actually asked goes into the history
   return q;
 }
 function planTapRound() { const plan = []; while (plan.length < S.n) plan.push(chooseTapQuestion(plan)); return plan; }
@@ -1289,7 +1319,7 @@ function closerStart() {
   if (pool().length < 1 || CUR.playable.length < 3) return noScope();
   let x, a, b, da, db, tries = 0;
   do {
-    x = pickTarget(pool());
+    x = pickTarget(pool(), false); // record only the final choice, not every rejected try
     const others = CUR.playable.filter(c => c !== x);
     const near = others.sort((p, q) => haversine(p.centroid, x.centroid) - haversine(q.centroid, x.centroid)).slice(0, 40);
     a = pick(near); b = pick(near);
@@ -1297,6 +1327,7 @@ function closerStart() {
     if (a === b) continue;
     da = unitDist(a, x); db = unitDist(b, x);
   } while ((a === b || Math.abs(da - db) < 0.25 * Math.max(da, db, 1) || (da === 0 && db === 0)) && tries < 60);
+  remember(x.key, x.name);
   S.x = x; S.a = a; S.b = b; S.da = da; S.db = db; S.answered = false;
   flyHome();
   closerRender();
@@ -1514,6 +1545,7 @@ function openStats() {
     STATS = { units: {}, globle: [], tap: [], streaks: {} }; save();
     try { localStorage.removeItem('geodrill.program'); } catch (e) {}
     for (const k of Object.keys(RECENT)) delete RECENT[k];
+    saveRecent();
     openStats();
   };
   render();

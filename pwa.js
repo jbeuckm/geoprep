@@ -4,15 +4,16 @@
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
     window.addEventListener('load', async () => {
       try {
+        // A first visit has no controller yet: installing the worker must not reload the page mid-game.
+        // Updates never reload on their own either; the user picks when, via the toast.
+        const hadController = !!navigator.serviceWorker.controller;
         const reg = await navigator.serviceWorker.register('sw.js');
         reg.addEventListener('updatefound', () => {
           const nw = reg.installing; if (!nw) return;
           nw.addEventListener('statechange', () => {
-            if (nw.state === 'installed' && navigator.serviceWorker.controller) showToast('A new version is ready.', 'Reload', () => { nw.postMessage('skipWaiting'); });
+            if (nw.state === 'activated' && hadController) showToast('A new version is ready.', 'Reload', () => location.reload());
           });
         });
-        let refreshing = false;
-        navigator.serviceWorker.addEventListener('controllerchange', () => { if (refreshing) return; refreshing = true; location.reload(); });
       } catch (e) { console.warn('SW registration failed', e); }
     });
   }
