@@ -850,6 +850,7 @@ function tapStart() {
 }
 function tapNext() {
   resetGlobe(); canvas.classList.add('tap');
+  flyHome(); // each question starts from the whole scope, not zoomed in on the last answer
   const units = pool(), places = scopedPlaces(S.cats);
   if (!S.cats.unit && !places.length) S.cats.unit = true;
   let q;
