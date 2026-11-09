@@ -465,6 +465,7 @@ function render() {
       ctx.fillStyle = cssVar('--text'); ctx.fillText(m.label, r.x + 4, r.y + h / 2);
     }
   }
+  if (LABELS.level > 0 && labelsAllowed() && !G.coarse) drawLearningLabels(center, placed, hits);
   ctx.beginPath(); G.path({ type: 'Sphere' }); ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke();
 }
 function flyTo(lonlat, zoom, ms = 900) {
@@ -481,6 +482,68 @@ function flyTo(lonlat, zoom, ms = 900) {
     else { G.coarse = true; render(); }
   });
 }
+// ---------- Learning labels: names (and optionally cities) for everything in view ----------
+const LABELS = { level: 0 }; // 0 off, 1 names, 2 names + cities and capitals
+try { LABELS.level = +(localStorage.getItem('geodrill.labels') || 0) || 0; } catch (e) {}
+const LABEL_MODES = new Set(['study', 'explore']); // learning views only, so drills are never given away
+function labelsAllowed() { return LABEL_MODES.has(mode); }
+function byAreaDesc(units) { return units.__sorted || (units.__sorted = units.slice().sort((a, b) => b.area - a.area)); }
+function drawLearningLabels(center, placed, hits) {
+  const vis = p => d3.geoDistance(p, center) < Math.PI / 2 - 0.06;
+  const drawn = new Set(G.markers.filter(m => m.label).map(m => m.label));
+  const put = (text, x, y, font, color, bg) => {
+    ctx.font = font; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+    const w = ctx.measureText(text).width + 6, h = 15, r = { x: x - w / 2, y: y - h / 2, w, h };
+    if (x < 0 || y < 0 || x > G.w || y > G.h || hits(r)) { ctx.textAlign = 'start'; return false; }
+    placed.push(r); ctx.fillStyle = bg; ctx.fillRect(r.x, r.y, w, h); ctx.fillStyle = color; ctx.fillText(text, x, y); ctx.textAlign = 'start'; return true;
+  };
+  const strong = cssVar('--text'), muted = cssVar('--muted'), bg = cssVar('--panel-faint');
+  // Priority: capitals, then unit names, then other cities and landmarks, so region names never lose to minor towns.
+  const drawPlaces = kinds => {
+    for (const pl of CUR.places) {
+      if (!kinds.includes(pl.kind)) continue;
+      if (!vis(pl.p)) continue;
+      const [x, y] = G.projection(pl.p);
+      if (x < 0 || y < 0 || x > G.w || y > G.h) continue;
+      const font = pl.kind === 'capital' ? '600 11px system-ui, sans-serif' : '500 10.5px system-ui, sans-serif';
+      ctx.font = font; const w = ctx.measureText(pl.name).width + 6;
+      const r = { x: x + 5, y: y - 7.5, w, h: 15 };
+      if (hits(r) || hits({ x: x - 4, y: y - 4, w: 8, h: 8 })) continue;
+      placed.push(r, { x: x - 4, y: y - 4, w: 8, h: 8 });
+      ctx.beginPath(); ctx.arc(x, y, pl.kind === 'capital' ? 3.5 : 2.5, 0, 2 * Math.PI);
+      ctx.fillStyle = pl.kind === 'capital' ? cssVar('--bad') : pl.kind === 'landmark' ? cssVar('--warn') : strong; ctx.fill();
+      ctx.fillStyle = bg; ctx.fillRect(r.x, r.y, w, 15); ctx.fillStyle = pl.kind === 'capital' ? strong : muted;
+      ctx.textBaseline = 'middle'; ctx.fillText(pl.name, r.x + 3, y);
+    }
+  };
+  if (LABELS.level >= 2) drawPlaces(['capital']);
+  // Unit names, largest first: small units appear as you zoom in and there is room.
+  for (const u of byAreaDesc(CUR.units)) {
+    if (drawn.has(u.name) || !vis(u.anchor)) continue;
+    const [x, y] = G.projection(u.anchor);
+    put(u.name, x, y, '600 11.5px system-ui, sans-serif', strong, bg);
+  }
+  if (LABELS.level >= 2) drawPlaces(['city', 'landmark']);
+  // On a sub-national level, also name the surrounding countries in a quieter style.
+  if (!CUR.isWorld) for (const u of byAreaDesc(WORLD.units)) {
+    if (u.name === CUR.def.parent || drawn.has(u.name) || !vis(u.anchor)) continue;
+    const [x, y] = G.projection(u.anchor);
+    put(u.name, x, y, '500 10.5px system-ui, sans-serif', muted, bg);
+  }
+}
+function updateLabelButton() {
+  const b = document.getElementById('lbl'); if (!b) return;
+  b.style.display = labelsAllowed() ? '' : 'none';
+  b.classList.toggle('on', LABELS.level > 0);
+  b.textContent = LABELS.level === 2 ? 'Aa•' : 'Aa';
+  const next = LABELS.level === 0 ? 'Show names' : LABELS.level === 1 ? 'Show names, capitals and cities' : 'Hide labels';
+  b.title = next; b.setAttribute('aria-label', next); b.setAttribute('aria-pressed', LABELS.level > 0 ? 'true' : 'false');
+}
+document.getElementById('lbl').onclick = () => {
+  LABELS.level = (LABELS.level + 1) % 3;
+  try { localStorage.setItem('geodrill.labels', String(LABELS.level)); } catch (e) {}
+  updateLabelButton(); render();
+};
 function flyHome() {
   if (REGION === 'All' || !pool().length) return flyTo(CUR.def.home, CUR.def.homeZoom);
   const fr = frameZoom(pool(), 0.8, true);
@@ -602,6 +665,7 @@ const nav = document.getElementById('nav');
 MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => { if (id !== 'train') trainStop(true); setMode(id); }; nav.appendChild(b); });
 function setMode(id) {
   mode = id; S = {};
+  updateLabelButton();
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   [...nav.children].forEach(b => b.classList.toggle('on', b.dataset.id === id));
   resetGlobe(); render();
@@ -768,7 +832,7 @@ function studyStart() {
   const row = u => `<div class="urow" data-n="${esc(u.name)}"><span class="un">${flagImg(u)}${esc(u.name)}</span><span class="uc muted">${u.capital ? esc(u.capital) : ''}</span><span class="ub muted">${u.neighbors.size ? u.neighbors.size + (u.neighbors.size === 1 ? ' neighbour' : ' neighbours') : 'no land borders'}${u.places && u.places.length ? ' · ' + u.places.length + (u.places.length === 1 ? ' place' : ' places') : ''}</span></div>`;
   panel.innerHTML = `<h2>Study guide</h2>
     ${scopeLine()}
-    <p class="sub">Click a ${esc(CUR.def.unit)} to fly to it and see its neighbours. Then drill the same scope with the buttons below.</p>
+    <p class="sub">Click a ${esc(CUR.def.unit)} to fly to it and see its neighbours. Press <b>Aa</b> on the globe to label the map (press again to add capitals and cities). Then drill the same scope with the buttons below.</p>
     <div class="row" style="margin:6px 0 10px">
       <button class="btn" data-m="tap">Tap</button><button class="btn" data-m="nameit">Name It</button><button class="btn" data-m="neighbors">Borders</button><button class="btn" data-m="globle">Hot &amp; Cold</button>${CUR.isWorld ? '<button class="btn" data-m="flags">Flags</button><button class="btn" data-m="clues">Clues</button>' : ''}
       <button class="btn sec" id="tour">▶ Tour</button>
@@ -1303,7 +1367,7 @@ function cluesAnswer(i) {
 // ----- Stats -----
 document.getElementById('statsbtn').onclick = () => openStats();
 function openStats() {
-  resetGlobe(); G.hover = true; [...nav.children].forEach(b => b.classList.remove('on')); mode = 'stats';
+  resetGlobe(); G.hover = true; [...nav.children].forEach(b => b.classList.remove('on')); mode = 'stats'; updateLabelButton();
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   const rows = Object.entries(STATS.units).filter(([, v]) => v.seen >= 2 && v.miss > 0).map(([k, v]) => ({ k, rate: v.miss / v.seen, ...v })).sort((a, b) => b.rate - a.rate || b.seen - a.seen);
   const weak = rows.slice(0, 20);

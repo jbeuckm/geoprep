@@ -55,6 +55,8 @@ Two dropdowns in the header set what every mode uses:
 | Flags | A national flag; choose the country from four regional neighbours (world level) | all |
 | Clues | Three street-level clues (driving side, road lines, poles, signs, plates, camera-car quirks, language); pick the country from four same-side neighbours. Reveal more clues on demand | street |
 
+In Study and Explore, the **Aa** button on the globe labels the map: one press names every unit in view (largest first, more appear as you zoom), a second adds capitals and cities, a third turns labels off. The setting is remembered, and the button is hidden in drills so it never gives answers away.
+
 Every mode records misses per unit in `localStorage`. Units you miss come up more often in all modes, and the **Stats** view maps them green-to-red and lists the weakest.
 
 ## Data
