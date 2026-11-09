@@ -52,7 +52,12 @@ const LEVEL_DEFS = {
 };
 // Known errors in the boundary data, corrected at the adjacency level so Borders/Globle teach current facts.
 // India: the 2014 transfer of the Bhadrachalam-area mandals to Andhra Pradesh is missing from Natural Earth.
-const ADJ_FIX = { india: { remove: [['Telangana', 'Odisha']], add: [['Andhra Pradesh', 'Chhattisgarh']] } };
+const ADJ_FIX = {
+  india: { remove: [['Telangana', 'Odisha']], add: [['Andhra Pradesh', 'Chhattisgarh']] },
+  usa: { remove: [['Utah', 'New Mexico'], ['Arizona', 'Colorado']] }, // Four Corners: point contact only
+};
+// Far-flung dependencies bundled into a country's polygon that distort distances (kept drawn, dropped from maths).
+const PIECE_DROP = { 'New Zealand': c => c[1] > -25 /* Tokelau */ };
 const LEVELS = {};           // id -> loaded level
 let WORLD = null, CUR = null; // base map level, current level
 let REGION = 'All';           // current region label within CUR
@@ -97,7 +102,7 @@ const RECENT = {}; // mode+level -> recent target keys, to avoid immediate repea
 function pickTarget(list) {
   const key = mode + ':' + (CUR ? CUR.id : '');
   const rec = RECENT[key] || (RECENT[key] = []);
-  const avoid = new Set(rec.slice(-Math.min(8, Math.floor(list.length / 2))));
+  const avoid = new Set(rec.slice(-Math.min(8, list.length - 1)));
   const cands = list.filter(u => !avoid.has(u.key));
   const u = weightedPick(cands.length ? cands : list);
   rec.push(u.key); if (rec.length > 50) rec.shift();
@@ -169,6 +174,12 @@ function buildLevel(id, topo) {
       for (const poly of polys) { const geo = { type: 'Polygon', coordinates: poly }; g.pieces.push({ p: d3.geoCentroid(geo), a: d3.geoArea(geo) }); }
     }
     g.pieces = g.pieces.sort((x, y) => y.a - x.a).map(x => x.p);
+    g.anchor = g.pieces[0] || g.centroid; // label/marker position: centre of the main landmass, not of a scattered multipolygon
+    if (isWorld && PIECE_DROP[g.name]) { // drop far-flung pieces from distance maths
+      const drop = PIECE_DROP[g.name];
+      g.vertices = g.vertices.filter(v => !drop(v));
+      g.pieces = g.pieces.filter(pt => !drop(pt));
+    }
     g.region = primaryRegion[g.name] || (isWorld ? 'Other' : '');
     g.playable = isWorld ? !NOT_PLAYABLE.has(g.name) : true;
     g.capital = caps.get(g.name) || null;
@@ -242,12 +253,25 @@ function pointToUnitDist(pt, c) {
   let best = Infinity; for (const q of c.vertices) { const d = haversine(pt, q); if (d < best) best = d; }
   return best;
 }
+function nearestBorderPoint(pt, c) {
+  let best = Infinity, bp = c.anchor; for (const q of c.vertices) { const d = haversine(pt, q); if (d < best) { best = d; bp = q; } }
+  return bp;
+}
 function zoomForArea(area) { return Math.max(1, Math.min(12, 0.9 * Math.pow(0.05 / Math.max(area, 1e-7), 0.35))); }
 // Zoom that fits a set of units: based on the angular radius of the group around its centroid.
-function frameZoom(units, fill = 0.8) {
-  const fc = { type: 'FeatureCollection', features: units.flatMap(u => u.features) };
-  const c = d3.geoCentroid(fc);
-  let r = 0; for (const u of units) for (const v of u.vertices) r = Math.max(r, d3.geoDistance(c, v));
+function frameZoom(units, fill = 0.8, trim = false) {
+  let set = units.slice();
+  let c = d3.geoCentroid({ type: 'MultiPoint', coordinates: set.map(u => u.anchor) });
+  if (trim && set.length >= 4) { // drop up to 20% of units whose main landmass sits far from the rest
+    for (let k = 0; k < Math.floor(set.length * 0.2); k++) {
+      const ds = set.map(u => d3.geoDistance(u.anchor, c)).sort((a, b) => a - b), med = ds[Math.floor(ds.length / 2)];
+      let far = null, fd = 0; for (const u of set) { const d = d3.geoDistance(u.anchor, c); if (d > fd) { fd = d; far = u; } }
+      if (fd > 2.5 * Math.max(med, 0.02)) { set = set.filter(u => u !== far); c = d3.geoCentroid({ type: 'MultiPoint', coordinates: set.map(u => u.anchor) }); } else break;
+    }
+  }
+  let r = 0;
+  for (const u of set) { const vs = trim ? u.pieces.slice(0, 3) : u.vertices; for (const v of vs) r = Math.max(r, d3.geoDistance(c, v)); }
+  if (trim) r *= 1.25; // pieces are centres, so pad for the land around them
   return { center: c, zoom: Math.max(1, Math.min(48, fill / Math.max(r, 0.01))) };
 }
 // Zoom needed so the closest pair of points is at least minPx apart on screen.
@@ -272,15 +296,15 @@ function contextLabels(center, zoom, exclude, max = 30) {
   const out = [];
   for (const u of CUR.units) {
     if (exclude.has(u)) continue;
-    const dc = d3.geoDistance(u.centroid, center);
-    if (dc < radius * 0.7) { out.push({ u, p: u.centroid }); continue; }
+    const dc = d3.geoDistance(u.anchor, center);
+    if (dc < radius * 0.7) { out.push({ u, p: u.anchor }); continue; }
     if (dc > radius + 1.0) continue; // too far for any vertex to be in view
-    // Big neighbour whose centre is off-screen: label it at its nearest visible edge.
+    // Big neighbour whose centre is off-screen: label it just inside its nearest visible edge (pixel inset applied at draw time).
     let best = null, bd = radius * 0.95;
     for (const v of u.vertices) { const d = d3.geoDistance(v, center); if (d < bd) { bd = d; best = v; } }
-    if (best) out.push({ u, p: d3.geoInterpolate(best, center)(Math.min(0.5, 0.06 / Math.max(bd, 0.01))) });
+    if (best) out.push({ u, p: best, edge: true });
   }
-  return out.sort((a, b) => b.u.area - a.u.area).slice(0, max).map(x => ({ p: x.p, label: x.u.name, textOnly: true }));
+  return out.sort((a, b) => b.u.area - a.u.area).slice(0, max).map(x => ({ p: x.p, label: x.u.name, textOnly: true, edge: !!x.edge }));
 }
 // Zoom to frame one unit: by area, but widened for scattered archipelagos and capped for tiny units so nearby land gives context.
 function zoomForUnit(u) {
@@ -334,7 +358,7 @@ function resize() {
   G.base = Math.min(G.w, G.h) / 2 - 12;
   render();
 }
-const geomOf = c => G.coarse ? c.featuresCoarse : c.featuresDraw;
+const geomOf = c => G.coarse ? c.featuresCoarse : (G.zoom >= 8 ? c.features : c.featuresDraw);
 function drawUnits(units, fallback) {
   for (const c of units) {
     const f = G.fill(c) || fallback;
@@ -394,8 +418,12 @@ function render() {
     const [x, y] = G.projection(m.p);
     if (m.textOnly) { // quiet context label, centred on the point, dropped if it would collide
       ctx.font = '500 11px system-ui, sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
-      const tw = ctx.measureText(m.label).width, w = tw + 6, h = 15, r = { x: x - w / 2, y: y - h / 2, w, h };
-      if (!hits(r)) { placed.push(r); ctx.fillStyle = cssVar('--panel-faint'); ctx.fillRect(r.x, r.y, w, h); ctx.fillStyle = cssVar('--muted'); ctx.fillText(m.label, x, y); }
+      let lx = x, ly = y;
+      if (m.edge) { // nudge an edge label a fixed 16px toward the view centre so it sits inside its own country
+        const dx = G.w / 2 - x, dy = G.h / 2 - y, L = Math.hypot(dx, dy) || 1; lx = x + dx / L * 16; ly = y + dy / L * 16;
+      }
+      const tw = ctx.measureText(m.label).width, w = tw + 6, h = 15, r = { x: lx - w / 2, y: ly - h / 2, w, h };
+      if (!hits(r)) { placed.push(r); ctx.fillStyle = cssVar('--panel-faint'); ctx.fillRect(r.x, r.y, w, h); ctx.fillStyle = cssVar('--muted'); ctx.fillText(m.label, lx, ly); }
       ctx.textAlign = 'start'; continue;
     }
     ctx.beginPath(); ctx.arc(x, y, m.r || 6, 0, 2 * Math.PI); ctx.fillStyle = m.color; ctx.fill();
@@ -428,7 +456,7 @@ function flyTo(lonlat, zoom, ms = 900) {
 }
 function flyHome() {
   if (REGION === 'All' || !pool().length) return flyTo(CUR.def.home, CUR.def.homeZoom);
-  const fr = frameZoom(pool(), 0.8);
+  const fr = frameZoom(pool(), 0.8, true);
   flyTo(fr.center, Math.max(CUR.def.homeZoom, fr.zoom));
 }
 function invert(x, y) {
@@ -544,6 +572,13 @@ function setMode(id) {
   resetGlobe(); render();
   ({ train: trainLanding, study: studyStart, explore, tap: tapStart, globle: globleStart, neighbors: neighborsStart, closer: closerStart, nameit: nameitStart, flags: flagsStart, clues: cluesStart })[id]();
 }
+function revealFeedback(sel) {
+  if (window.innerWidth > 860) return;
+  const el = document.querySelector(sel), side = document.getElementById('side');
+  if (!el || !el.firstElementChild) return;
+  const top = el.firstElementChild.getBoundingClientRect().top - side.getBoundingClientRect().top + side.scrollTop - 8;
+  side.scrollTo({ top, behavior: 'smooth' }); // scroll the panel only, never the document
+}
 function coach(items) { return `<div class="coach"><b>Coach</b><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`; }
 function scopeLine() { return `<div class="scopeline">Scope: <b>${esc(scopeLabel())}</b> · ${pool().length} ${esc(CUR.def.units)}</div>`; }
 function noScope() { panel.innerHTML = `<h2>Nothing in scope</h2><p class="sub">This region has no playable ${esc(CUR.def.units)}. Pick another region above.</p>`; return true; }
@@ -565,8 +600,9 @@ function trainTopics(program) {
   if (PROGRAMS[program].levels === 'all') {
     for (const [id, regs] of Object.entries(window.LEVEL_REGIONS)) {
       const name = LEVEL_DEFS[id].label.split(' · ')[0];
-      if (Object.keys(regs).length) for (const r of Object.keys(regs)) out.push({ level: id, region: r, label: `${name}: ${r}`, keys: regs[r].map(n => id + ':' + n) });
-      else out.push({ level: id, region: 'All', label: name, keys: (window.SUBCAPITALS[id] || []).map(p => id + ':' + p[0]) });
+      const allKeys = (window.SUBCAPITALS[id] || []).map(p => id + ':' + p[0]);
+      for (const r of Object.keys(regs)) if (regs[r].length >= 4) out.push({ level: id, region: r, label: `${name}: ${r}`, keys: regs[r].map(n => id + ':' + n) });
+      out.push({ level: id, region: 'All', label: name, keys: allKeys }); // whole-level topic covers tiny regions too
     }
   }
   return out;
@@ -577,12 +613,18 @@ function topicStats(t) {
   return { seen, miss, weight: (miss + 1) / (seen + 2) }; // unseen topics start at 0.5 so coverage happens; mastered topics fade
 }
 function pickTopic(program) {
-  const scored = trainTopics(program).map(t => ({ t, ...topicStats(t) }));
-  for (const x of scored) if (TRAIN.lastTopic && x.t.label === TRAIN.lastTopic.label) x.weight *= 0.4;
-  scored.sort((a, b) => b.weight - a.weight);
-  const top = scored.slice(0, 5); let r = Math.random() * top.reduce((a, x) => a + x.weight, 0);
-  for (const x of top) { r -= x.weight; if (r <= 0) return x; }
-  return top[0];
+  // Sample across all topics with probability ∝ weight²: weak and unseen topics dominate, but every level gets visited.
+  const scored = shuffle(trainTopics(program).map(t => ({ t, ...topicStats(t) })));
+  const perLevel = {}; for (const x of scored) perLevel[x.t.level] = (perLevel[x.t.level] || 0) + 1;
+  for (const x of scored) {
+    if (x.t.level !== 'world') x.weight *= Math.min(1, 4 / perLevel[x.t.level]); // a level with many regions should not swamp the mix
+    if (TRAIN.lastTopic && x.t.label === TRAIN.lastTopic.label) x.weight *= 0.3;
+    if (TRAIN.lastTopic && x.t.level === TRAIN.lastTopic.level && x.t.level !== 'world') x.weight *= 0.7; // vary levels
+    x.w2 = x.weight * x.weight;
+  }
+  let r = Math.random() * scored.reduce((a, x) => a + x.w2, 0);
+  for (const x of scored) { r -= x.w2; if (r <= 0) return x; }
+  return scored[0];
 }
 function pickMode(program, level) {
   const table = PROGRAMS[program].modes[level === 'world' ? 'world' : 'sub'];
@@ -646,7 +688,8 @@ function trainBar() {
   const st = topicStats(TRAIN.topic), p = PROGRAMS[TRAIN.program];
   const reason = TRAIN.phase === 'review' ? `You missed ${TRAIN.setMiss} of ${TRAIN.setSeen} here. Have a look, then try it again.`
     : st.seen === 0 ? 'New ground: sampling it to see how you do.' : `${st.miss} of ${st.seen} missed here so far.`;
-  const modeLabel = (MODES.find(m => m[0] === mode) || [])[1] || '';
+  let modeLabel = (MODES.find(m => m[0] === mode) || [])[1] || '';
+  if (mode === 'tap' && S.round) modeLabel += ` · Q${Math.min(S.round.length + 1, S.n)}/${S.n}`;
   el.innerHTML = `<div class="tbt">Training for ${esc(p.label)} · set ${TRAIN.sets}${TRAIN.phase === 'review' ? ' · review' : ` · ${esc(modeLabel)}${TRAIN.remaining > 1 ? ` (${TRAIN.remaining} left)` : ''}`}</div>
     <div>${esc(TRAIN.topic.label)} <span class="muted">· ${reason}</span></div>
     <div class="row">${TRAIN.phase === 'review' ? '<button class="btn" id="tbquiz">Quiz me again</button>' : '<button class="btn sec" id="tbskip">Skip topic</button>'}<button class="btn sec" id="tbstop">Stop</button></div>`;
@@ -752,7 +795,11 @@ function tapNext() {
   let q;
   const unitShare = places.length ? 0.6 : 1;
   if (S.cats.unit && Math.random() < unitShare) q = { kind: 'unit', c: pickTarget(units) };
-  else if (places.length) q = { kind: 'place', pl: pick(places) };
+  else if (places.length) { // choose a unit (weighted) first, then one of its places, so place-rich units do not dominate
+    const byUnit = new Map(); for (const pl of places) for (const u of pl.units) { if (!byUnit.has(u)) byUnit.set(u, []); byUnit.get(u).push(pl); }
+    const u = byUnit.size ? weightedPick([...byUnit.keys()]) : null;
+    q = { kind: 'place', pl: u ? pick(byUnit.get(u)) : pick(places) };
+  }
   else q = { kind: 'unit', c: pickTarget(units) };
   if (units.length + places.length > 8 && S.round.some(r => r.q.kind === q.kind && (q.kind === 'unit' ? r.q.c === q.c : r.q.pl === q.pl))) return tapNext();
   S.q = q; S.answered = false;
@@ -783,6 +830,7 @@ function tapRender() {
       'For capitals, know which side of the territory they sit on. Many are coastal or near a border.',
       'Zoom in before tapping. A tap inside the border scores full marks, so a careful tap beats a quick one.'])}`;
   panel.querySelectorAll('input[data-cat]').forEach(cb => cb.onchange = () => { S.cats[cb.dataset.cat] = cb.checked; });
+  if (TRAIN.active) trainBar();
   const rc = document.getElementById('revealc'); if (rc) rc.onclick = e => { e.preventDefault(); rc.replaceWith(document.createTextNode(q.pl.where)); };
 }
 function tapRounds(level) { return STATS.tap.map(r => typeof r === 'number' ? { t: r, level: 'world' } : r).filter(r => r.level === level).map(r => r.t); }
@@ -794,24 +842,25 @@ function tapHistory() {
 function tapAnswer(p) {
   if (S.answered) return; S.answered = true; G.onTap = null; canvas.classList.remove('tap');
   const q = S.q; let d, target, inside = false, statUnit;
-  if (q.kind === 'unit') { d = pointToUnitDist(p, q.c); inside = d === 0; target = q.c.centroid; statUnit = q.c; }
+  if (q.kind === 'unit') { d = pointToUnitDist(p, q.c); inside = d === 0; target = inside ? q.c.anchor : nearestBorderPoint(p, q.c); statUnit = q.c; }
   else { target = q.pl.p; d = haversine(p, target); if (d < 25) { d = 0; inside = true; } statUnit = q.pl.units[0] || null; }
   const score = tapScore(d);
   if (statUnit) mark(statUnit, score < 60);
   S.round.push({ q, score, d });
   const okc = cssVar('--ok'), badc = cssVar('--bad');
   if (q.kind === 'unit') G.fill = x => x === q.c ? okc : null;
-  G.markers = [{ p: target, color: okc, label: q.kind === 'unit' ? q.c.name : q.pl.name }];
+  G.markers = [{ p: target, color: okc, label: q.kind === 'unit' ? (inside ? q.c.name : q.c.name + ' border') : q.pl.name }];
   if (!inside) { G.markers.push({ p, color: badc, label: 'you' }); G.lines = [{ a: p, b: target }]; }
   G.hover = true;
   // Frame both dots: pick a zoom where the miss spans roughly a third of the globe view, so near misses are still visible.
   const mid = d3.geoInterpolate(p, target)(0.5);
   let zt, ct;
   if (inside) { ct = target; zt = q.kind === 'unit' ? Math.max(1.2, zoomForUnit(q.c) * 0.9) : Math.max(G.zoom, 6); }
-  else { const theta = d3.geoDistance(p, target); ct = mid; zt = Math.max(1, Math.min(48, 0.7 / Math.max(theta, 1e-4))); }
+  else { const theta = d3.geoDistance(p, target); ct = mid; zt = Math.max(1, Math.min(24, 0.7 / Math.max(theta, 1e-4))); }
   flyTo(ct, zt);
   G.markers = G.markers.concat(contextLabels(ct, zt, new Set(q.kind === 'unit' ? [q.c] : q.pl.units)));
   const cls = score >= 80 ? 'ok' : score >= 40 ? 'warn' : 'bad';
+  setTimeout(() => revealFeedback('#tapfb'), 50);
   const msg = inside ? (q.kind === 'unit' ? 'Inside the border. Full marks.' : 'Dead on.') : `You were <b>${fmtKm(d)}</b> off${q.kind === 'unit' ? ' from the border' : ''}.`;
   const done = S.round.length >= S.n;
   document.getElementById('tapfb').innerHTML = `<div class="card ${cls}"><div class="big">${score} pts</div><div>${msg}</div>
@@ -891,7 +940,8 @@ function globleEnd(won) {
   globleRender();
   const zg = Math.max(1.2, zoomForUnit(S.target) * 0.8);
   flyTo(S.target.centroid, zg);
-  G.markers = contextLabels(S.target.centroid, zg, new Set([S.target]));
+  G.markers = [{ p: S.target.anchor, color: cssVar('--ok'), r: 7, label: S.target.name }].concat(contextLabels(S.target.centroid, zg, new Set([S.target])));
+  setTimeout(() => revealFeedback('#gres'), 50);
   G.hover = true;
   const nbs = [...S.target.neighbors].sort();
   document.getElementById('gres').innerHTML = `<div class="card ${won ? 'ok' : 'bad'}"><div class="big">${won ? `Solved in ${S.guesses.length}` : 'Gave up'}</div>
@@ -902,7 +952,8 @@ function globleEnd(won) {
 // ----- Borders (neighbours) -----
 function neighborsStart() {
   if (!pool().length) return noScope();
-  const t = pickTarget(pool());
+  const withNb = pool().filter(u => u.neighbors.size);
+  const t = pickTarget(withNb.length && Math.random() < 0.8 ? withNb : pool());
   S.target = t; S.sel = new Set(); S.checked = false;
   const actual = [...t.neighbors].map(n => CUR.byName.get(n)).filter(c => c && c.playable);
   const nDistract = Math.max(3, actual.length);
@@ -949,9 +1000,10 @@ function neighborsCheck() {
   // Label every option on the map in the same colour as its chip, so the shapes can be matched to the list.
   const colorFor = c => c === S.target ? cssVar('--accent') : S.actual.has(c.name) ? (picked.has(c.name) ? okc : warnc) : picked.has(c.name) ? badc : cssVar('--muted');
   const shown = [S.target, ...S.options];
-  G.markers = shown.map(c => ({ p: c.centroid, color: colorFor(c), r: c === S.target ? 7 : 5, label: c.name + (S.actual.has(c.name) ? (picked.has(c.name) ? ' ✓' : ' (missed)') : picked.has(c.name) ? ' ✗' : '') }));
-  const group = [S.target, ...[...S.actual].map(n => CUR.byName.get(n)).filter(Boolean), ...[...picked].map(n => CUR.byName.get(n)).filter(Boolean)];
-  const fr = frameWithLabels(group, group.map(u => u.centroid), 0.75, 3);
+  G.markers = shown.map(c => ({ p: c.anchor, color: colorFor(c), r: c === S.target ? 7 : 5, label: c.name + (S.actual.has(c.name) ? (picked.has(c.name) ? ' ✓' : ' (missed)') : picked.has(c.name) ? ' ✗' : '') }));
+  const group = shown; // frame every option so each labelled marker is on screen
+  const fr = frameWithLabels(group, group.map(u => u.anchor), 0.75, 3);
+  setTimeout(() => revealFeedback('#nbfb'), 50);
   G.markers = G.markers.concat(contextLabels(fr.center, fr.zoom, new Set(shown)));
   flyTo(fr.center, fr.zoom);
   G.hover = true;
@@ -1008,6 +1060,7 @@ function closerAnswer(k) {
   const mid = d3.geoInterpolate(S.a.centroid, S.b.centroid)(0.5);
   const spread = Math.max(haversine(S.a.centroid, S.x.centroid), haversine(S.b.centroid, S.x.centroid), haversine(S.a.centroid, S.b.centroid));
   flyTo(d3.geoInterpolate(mid, S.x.centroid)(0.5), Math.max(1, Math.min(8, 6000 / Math.max(spread, 600))));
+  setTimeout(() => revealFeedback('#cfb'), 50);
   document.getElementById('cfb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${correct ? 'Correct' : 'Wrong'}</div>
     <div class="stat"><span>${esc(S.a.name)}</span><b>${S.da === 0 ? 'borders' : fmtKm(S.da)}</b></div>
     <div class="stat"><span>${esc(S.b.name)}</span><b>${S.db === 0 ? 'borders' : fmtKm(S.db)}</b></div>
@@ -1024,8 +1077,7 @@ function nameitStart() {
   S.t = t; S.opts = shuffle([t, ...shuffle(near).slice(0, 3)]); S.answered = false;
   G.fill = c => c === t ? cssVar('--accent') : null;
   const zn = Math.max(CUR.def.homeZoom, zoomForUnit(t) * 0.8);
-  flyTo(t.centroid, zn);
-  G.markers = contextLabels(t.centroid, zn, new Set(S.opts)); // orientation without giving away the options
+  flyTo(t.centroid, zn); // no labels before answering; context labels appear with the answer
   nameitRender();
 }
 function nameitRender() {
@@ -1047,9 +1099,10 @@ function nameitAnswer(i) {
   mark(S.t, !correct); save();
   panel.querySelectorAll('#nopts .btn').forEach(b => { const c = S.opts[+b.dataset.i]; if (c === S.t) b.classList.add('ok'); else if (+b.dataset.i === i) b.classList.add('bad'); });
   G.hover = true;
-  G.markers = contextLabels(S.t.centroid, G.zoom, new Set([S.t])).concat(S.opts.filter(c => c !== S.t).map(c => ({ p: c.centroid, label: c.name, textOnly: true })));
+  G.markers = contextLabels(S.t.centroid, G.zoom, new Set([S.t])).concat(S.opts.filter(c => c !== S.t).map(c => ({ p: c.anchor, label: c.name, textOnly: true })));
   render();
   const nbs = [...S.t.neighbors].sort();
+  setTimeout(() => revealFeedback('#nfb'), 50);
   document.getElementById('nfb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${flagImg(S.t, 'flag big')}${correct ? 'Correct' : 'It was ' + esc(S.t.name)}</div>
     <div class="small muted">${esc(S.t.region || '')}${S.t.capital ? ' · Capital: ' + esc(S.t.capital) : ''}${nbs.length ? ' · Borders: ' + nbs.map(esc).join(', ') : ' · No land borders'}</div>
     <div style="margin-top:8px"><button class="btn" id="nnext">Next</button></div></div>`;
@@ -1096,6 +1149,7 @@ function flagsAnswer(i) {
   G.markers = contextLabels(S.t.centroid, z, new Set([S.t]));
   G.hover = true;
   const nbs = [...S.t.neighbors].sort();
+  setTimeout(() => revealFeedback('#ffb'), 50);
   document.getElementById('ffb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${correct ? 'Correct' : 'It was ' + esc(S.t.name)}</div>
     <div class="small muted">${esc(S.t.region || '')}${S.t.capital ? ' · Capital: ' + esc(S.t.capital) : ''}${nbs.length ? ' · Borders: ' + nbs.map(esc).join(', ') : ' · No land borders'}</div>
     <div style="margin-top:8px"><button class="btn" id="fnext">Next</button></div></div>`;
@@ -1123,9 +1177,11 @@ function cluesStart() {
   const all = CUR.playable.filter(has), cands = pool().filter(has);
   if (all.length < 4) return noScope();
   const t = pickTarget(cands.length ? cands : all);
-  const near = all.filter(c => c !== t).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid)).slice(0, 15);
-  const sameSide = near.filter(c => window.CLUES[c.name].drive === window.CLUES[t.name].drive);
-  S.t = t; S.opts = shuffle([t, ...shuffle(sameSide.length >= 3 ? sameSide : near).slice(0, 3)]); S.answered = false;
+  const byDist = all.filter(c => c !== t).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid));
+  const cont = byDist.filter(c => c.region === t.region).slice(0, 12);
+  const base = cont.length >= 3 ? cont : byDist.slice(0, 12);
+  const sameSide = base.filter(c => window.CLUES[c.name].drive === window.CLUES[t.name].drive);
+  S.t = t; S.opts = shuffle([t, ...shuffle(sameSide.length >= 3 ? sameSide : base).slice(0, 3)]); S.answered = false;
   const keys = shuffle(Object.keys(window.CLUES[t.name]).filter(k => k !== 'tld'));
   S.shown = keys.slice(0, 3); S.hidden = keys.slice(3);
   cluesRender();
@@ -1157,6 +1213,7 @@ function cluesAnswer(i) {
   flyTo(S.t.centroid, z);
   G.markers = contextLabels(S.t.centroid, z, new Set([S.t]));
   G.hover = true;
+  setTimeout(() => revealFeedback('#clfb'), 50);
   document.getElementById('clfb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${flagImg(S.t, 'flag big')}${correct ? 'Correct' : 'It was ' + esc(S.t.name)}</div>
     <div class="small muted">${esc(S.t.region || '')}${S.t.capital ? ' · Capital: ' + esc(S.t.capital) : ''}</div>
     ${clueRows(S.t)}

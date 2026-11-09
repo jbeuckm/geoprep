@@ -127,9 +127,18 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
 .urow .ub{font-size:12px;min-width:44px;text-align:right}
 .urow .uc{font-size:13px}
 @media (max-width:860px){
-  main{grid-template-columns:1fr;grid-template-rows:55vh 1fr}
+  html,body{overflow:hidden}
+  main{grid-template-columns:1fr;grid-template-rows:42vh 1fr}
   #side{border-left:0;border-top:1px solid var(--line)}
   #globe-wrap{min-height:0}
+  header{display:grid;grid-template-columns:1fr auto auto;grid-template-areas:"title stats theme" "nav nav nav" "scope scope scope";row-gap:6px;padding-bottom:8px}
+  header h1{grid-area:title}
+  #statsbtn{grid-area:stats} #themebtn{grid-area:theme} #installbtn{display:none !important}
+  nav{grid-area:nav;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch;gap:2px}
+  nav::-webkit-scrollbar{display:none}
+  nav button{min-height:36px;font-size:14px;padding:6px 10px}
+  #scope{grid-area:scope} #scope select{flex:1;max-width:none;min-height:36px}
+  .spacer{display:none}
 }
 </style>
 </head>

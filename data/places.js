@@ -65,7 +65,7 @@ window.PLACES = [
 ["St. George's","Grenada",12.05,-61.75,"capital"],["Basseterre","Saint Kitts and Nevis",17.30,-62.72,"capital"],["Castries","Saint Lucia",14.01,-60.99,"capital"],
 ["Kingstown","Saint Vincent and the Grenadines",13.16,-61.22,"capital"],["Port of Spain","Trinidad and Tobago",10.65,-61.52,"capital"],
 ["Bogotá","Colombia",4.71,-74.07,"capital"],["Caracas","Venezuela",10.48,-66.90,"capital"],["Quito","Ecuador",-0.18,-78.47,"capital"],
-["Lima","Peru",-12.05,-77.04,"capital"],["La Paz","Bolivia",-16.50,-68.15,"capital"],["Santiago","Chile",-33.45,-70.67,"capital"],
+["Lima","Peru",-12.05,-77.04,"capital"],["Sucre","Bolivia",-19.05,-65.26,"capital"],["La Paz (seat of government)","Bolivia",-16.50,-68.15,"city"],["Santiago","Chile",-33.45,-70.67,"capital"],
 ["Buenos Aires","Argentina",-34.60,-58.38,"capital"],["Montevideo","Uruguay",-34.90,-56.16,"capital"],["Asunción","Paraguay",-25.26,-57.58,"capital"],
 ["Brasília","Brazil",-15.79,-47.88,"capital"],["Georgetown","Guyana",6.80,-58.16,"capital"],["Paramaribo","Suriname",5.85,-55.20,"capital"],
 ["Nuuk","Greenland",64.18,-51.72,"capital"],
