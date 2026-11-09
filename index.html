@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GeoDrill</title>
+<meta name="description" content="Geography drills on a 3D globe for MapTap and Globle: tap places, guess hidden countries, learn borders, states and cities.">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#f4f1ea" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e131c" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="GeoDrill">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<style>
+:root{
+  --bg:#f4f1ea; --panel:#ffffff; --text:#1d2230; --muted:#6b7280; --line:#e2ddd2;
+  --accent:#1f6feb; --accent-text:#ffffff; --ok:#1a8f4d; --warn:#d97706; --bad:#c2271d;
+  --ocean:#cfe0f2; --land:#ebe6da; --land-alt:#f6f1e4; --border:#b9b1a2; --grat:rgba(0,0,0,.06);
+  --chip:#f1eee6; --chip-on:#dbe7fb;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0e131c; --panel:#161c27; --text:#e8ebf1; --muted:#9aa3b2; --line:#2a3242;
+    --accent:#4c8dff; --accent-text:#0b1220; --ok:#34c372; --warn:#f0a53a; --bad:#ff6b5c;
+    --ocean:#0b1d33; --land:#2f3a4d; --land-alt:#3d4a60; --border:#5a6a85; --grat:rgba(255,255,255,.07);
+    --chip:#1f2735; --chip-on:#263d66;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0e131c; --panel:#161c27; --text:#e8ebf1; --muted:#9aa3b2; --line:#2a3242;
+  --accent:#4c8dff; --accent-text:#0b1220; --ok:#34c372; --warn:#f0a53a; --bad:#ff6b5c;
+  --ocean:#0b1d33; --land:#2f3a4d; --land-alt:#3d4a60; --border:#5a6a85; --grat:rgba(255,255,255,.07);
+  --chip:#1f2735; --chip-on:#263d66;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--text);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,sans-serif;display:flex;flex-direction:column;touch-action:manipulation;-webkit-tap-highlight-color:transparent;overscroll-behavior:none}
+html,body{height:100dvh}
+header{padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right));padding-top:max(10px,env(safe-area-inset-top))}
+#panel{padding-bottom:max(16px,env(safe-area-inset-bottom))}
+#installbtn{display:none}
+#installbtn.show{display:inline-block;background:var(--accent);color:var(--accent-text);border-color:transparent}
+.toast{position:fixed;left:50%;bottom:max(16px,env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:10px 14px;font-size:14px;box-shadow:0 4px 16px rgba(0,0,0,.2);z-index:10;display:flex;gap:10px;align-items:center}
+.toast button{background:var(--accent);color:var(--accent-text);border:0;border-radius:6px;padding:6px 10px;font:inherit;cursor:pointer}
+header{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:18px;margin:0 8px 0 0;letter-spacing:.2px}
+nav{display:flex;gap:4px;flex-wrap:wrap}
+nav button{background:transparent;border:1px solid transparent;color:var(--muted);padding:6px 10px;border-radius:8px;cursor:pointer;font:inherit;font-size:14px}
+nav button:hover{color:var(--text);background:var(--chip)}
+nav button.on{color:var(--text);background:var(--chip-on);border-color:var(--line)}
+.spacer{flex:1}
+.iconbtn{background:var(--chip);border:1px solid var(--line);color:var(--text);border-radius:8px;padding:6px 10px;cursor:pointer;font:inherit;font-size:13px}
+main{flex:1;display:grid;grid-template-columns:1fr 380px;min-height:0}
+#globe-wrap{position:relative;min-height:320px;overflow:hidden}
+canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+canvas.tap{cursor:crosshair}
+#tip{position:absolute;pointer-events:none;background:var(--panel);color:var(--text);border:1px solid var(--line);padding:4px 8px;border-radius:6px;font-size:13px;transform:translate(12px,12px);display:none;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+#gctl{position:absolute;right:12px;bottom:12px;display:flex;flex-direction:column;gap:6px}
+#gctl button{width:34px;height:34px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;font-size:16px}
+#panel{border-left:1px solid var(--line);background:var(--panel);padding:16px;overflow:auto}
+#panel h2{font-size:16px;margin:0 0 6px}
+.sub{color:var(--muted);font-size:13px;margin:0 0 12px}
+.prompt{font-size:26px;font-weight:650;margin:8px 0 2px;line-height:1.2}
+.hint{color:var(--muted);font-size:13px;min-height:18px}
+.card{border:1px solid var(--line);border-radius:10px;padding:12px;margin:12px 0;background:var(--bg)}
+.card.ok{border-color:var(--ok)} .card.bad{border-color:var(--bad)} .card.warn{border-color:var(--warn)}
+.big{font-size:22px;font-weight:650}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.btn{background:var(--accent);color:var(--accent-text);border:0;border-radius:8px;padding:9px 14px;font:inherit;font-weight:600;cursor:pointer}
+.btn.sec{background:var(--chip);color:var(--text);border:1px solid var(--line);font-weight:500}
+.btn:disabled{opacity:.5;cursor:default}
+.opts{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:10px 0}
+.opts .btn{text-align:left;padding:12px;background:var(--chip);color:var(--text);border:1px solid var(--line);font-weight:500}
+.opts .btn.ok{background:color-mix(in srgb,var(--ok) 25%,var(--chip));border-color:var(--ok)}
+.opts .btn.bad{background:color-mix(in srgb,var(--bad) 25%,var(--chip));border-color:var(--bad)}
+.opts .btn.miss{outline:2px dashed var(--warn)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.chip{background:var(--chip);border:1px solid var(--line);border-radius:999px;padding:6px 11px;cursor:pointer;font:inherit;font-size:14px;color:var(--text)}
+.chip.on{background:var(--chip-on);border-color:var(--accent)}
+.chip.ok{background:color-mix(in srgb,var(--ok) 30%,var(--chip));border-color:var(--ok)}
+.chip.bad{background:color-mix(in srgb,var(--bad) 30%,var(--chip));border-color:var(--bad)}
+.chip.miss{border-color:var(--warn);border-style:dashed}
+input[type=text]{width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit;font-size:16px}
+.glist{list-style:none;padding:0;margin:10px 0;max-height:40vh;overflow:auto}
+.glist li{display:flex;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;font-size:14px}
+.glist li .sw{width:14px;height:14px;border-radius:3px;border:1px solid rgba(0,0,0,.2);flex:none}
+.glist li .d{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}
+.stat{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dashed var(--line);font-size:14px}
+.stat b{font-variant-numeric:tabular-nums}
+.coach{font-size:13px;color:var(--muted);margin-top:14px;border-top:1px solid var(--line);padding-top:10px}
+.coach li{margin:3px 0}
+label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var(--muted);margin-right:8px}
+.scorebar{height:8px;background:var(--chip);border-radius:4px;overflow:hidden;margin:6px 0}
+.scorebar i{display:block;height:100%;background:var(--accent)}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+#loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:15px;background:color-mix(in srgb,var(--bg) 60%,transparent);pointer-events:none}
+#scope{display:flex;gap:6px}
+#scope select{background:var(--chip);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;font-size:13px;max-width:200px}
+.scopeline{font-size:13px;color:var(--muted);margin:0 0 8px}
+.ulist{margin:8px 0;max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
+.ugroup{position:sticky;top:0;background:var(--panel);padding:6px 10px;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;color:var(--muted);border-bottom:1px solid var(--line)}
+.urow{display:grid;grid-template-columns:1fr auto auto;gap:8px;padding:6px 10px;cursor:pointer;font-size:14px;border-bottom:1px dashed var(--line)}
+.urow:hover{background:var(--chip)} .urow.on{background:var(--chip-on)}
+.urow .ub{font-size:12px;min-width:44px;text-align:right}
+.urow .uc{font-size:13px}
+@media (max-width:860px){
+  main{grid-template-columns:1fr;grid-template-rows:55vh 1fr}
+  #panel{border-left:0;border-top:1px solid var(--line)}
+  #globe-wrap{min-height:0}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>GeoDrill</h1>
+  <nav id="nav"></nav>
+  <span class="spacer"></span>
+  <div id="scope"><select id="level" title="Level"></select><select id="region" title="Region"></select></div>
+  <button class="iconbtn" id="installbtn" title="Install GeoDrill as an app">Install</button>
+  <button class="iconbtn" id="statsbtn">Stats</button>
+  <button class="iconbtn" id="themebtn" title="Toggle theme">◐</button>
+</header>
+<main>
+  <section id="globe-wrap">
+    <canvas id="globe"></canvas>
+    <div id="tip"></div>
+    <div id="gctl">
+      <button id="zin" title="Zoom in">+</button>
+      <button id="zout" title="Zoom out">−</button>
+      <button id="zreset" title="Reset view">⌂</button>
+    </div>
+    <div id="loading">Loading map…</div>
+  </section>
+  <aside id="panel"></aside>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js" crossorigin="anonymous"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js" crossorigin="anonymous"></script>
+<script src="data/places.js"></script>
+<script src="data/regions.js"></script>
+<script src="data/subcapitals.js"></script>
+<script src="data/subcities.js"></script>
+<script src="app.js"></script>
+<script src="pwa.js"></script>
+</body>
+</html>
