@@ -280,6 +280,8 @@ function render() {
     ctx.strokeStyle = l.color || cssVar('--text'); ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.stroke(); ctx.setLineDash([]);
   }
   const center = [-G.rotate[0], -G.rotate[1]];
+  const placed = []; // label rectangles already drawn, to dodge overlaps
+  const hits = r => placed.some(q => r.x < q.x + q.w && q.x < r.x + r.w && r.y < q.y + q.h && q.y < r.y + r.h);
   for (const m of G.markers) {
     if (d3.geoDistance(m.p, center) > Math.PI / 2 - 0.02) continue;
     const [x, y] = G.projection(m.p);
@@ -287,9 +289,12 @@ function render() {
     ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
     if (m.label) {
       ctx.font = '600 12px system-ui, sans-serif'; ctx.textBaseline = 'middle';
-      const tw = ctx.measureText(m.label).width;
-      ctx.fillStyle = cssVar('--panel'); ctx.fillRect(x + 9, y - 9, tw + 8, 18);
-      ctx.fillStyle = cssVar('--text'); ctx.fillText(m.label, x + 13, y);
+      const tw = ctx.measureText(m.label).width, w = tw + 8, h = 18;
+      const candidates = [{ x: x + 9, y: y - 9 }, { x: x - 9 - w, y: y - 9 }, { x: x - w / 2, y: y + 10 }, { x: x - w / 2, y: y - 10 - h }];
+      let r = candidates.find(c => !hits({ x: c.x, y: c.y, w, h })) || candidates[0];
+      r = { x: r.x, y: r.y, w, h }; placed.push(r);
+      ctx.fillStyle = cssVar('--panel'); ctx.fillRect(r.x, r.y, w, h);
+      ctx.fillStyle = cssVar('--text'); ctx.fillText(m.label, r.x + 4, r.y + h / 2);
     }
   }
   ctx.beginPath(); G.path({ type: 'Sphere' }); ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke();
@@ -363,7 +368,7 @@ canvas.addEventListener('pointerup', e => {
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('pointerleave', () => { if (!down) { tip.style.display = 'none'; if (G.hoverName) { G.hoverName = null; render(); } } });
 canvas.addEventListener('wheel', e => { e.preventDefault(); setZoom(G.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)); }, { passive: false });
-function setZoom(z) { G.zoom = Math.max(0.6, Math.min(16, z)); renderCoarse(); }
+function setZoom(z) { G.zoom = Math.max(0.6, Math.min(48, z)); renderCoarse(); }
 document.getElementById('zin').onclick = () => setZoom(G.zoom * 1.4);
 document.getElementById('zout').onclick = () => setZoom(G.zoom / 1.4);
 document.getElementById('zreset').onclick = flyHome;
@@ -565,8 +570,10 @@ function tapAnswer(p) {
   G.markers = [{ p: target, color: okc, label: q.kind === 'unit' ? q.c.name : q.pl.name }];
   if (!inside) { G.markers.push({ p, color: badc, label: 'you' }); G.lines = [{ a: p, b: target }]; }
   G.hover = true;
+  // Frame both dots: pick a zoom where the miss spans roughly a third of the globe view, so near misses are still visible.
   const mid = d3.geoInterpolate(p, target)(0.5);
-  flyTo(inside ? target : mid, inside ? Math.max(G.zoom, 1.2) : Math.max(1, Math.min(G.zoom, 2500 / Math.max(d, 400))));
+  if (inside) flyTo(target, q.kind === 'unit' ? Math.max(1.2, zoomForArea(q.c.area) * 0.9) : Math.max(G.zoom, 6));
+  else { const theta = d3.geoDistance(p, target); flyTo(mid, Math.max(1, Math.min(48, 0.7 / Math.max(theta, 1e-4)))); }
   const cls = score >= 80 ? 'ok' : score >= 40 ? 'warn' : 'bad';
   const msg = inside ? (q.kind === 'unit' ? 'Inside the border. Full marks.' : 'Dead on.') : `You were <b>${fmtKm(d)}</b> off${q.kind === 'unit' ? ' from the border' : ''}.`;
   const done = S.round.length >= S.n;
