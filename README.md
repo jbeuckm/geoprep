@@ -2,6 +2,8 @@
 
 A browser geography trainer built to raise scores in **MapTap** (tap a prompted place on a 3D globe, scored by distance) and **Globle** (guess the hidden country from hot/cold colours).
 
+**Live:** https://jbeuckm.github.io/geoprep/ — installable as a PWA (Install button in Chrome/Edge/Android; on iOS use Share → Add to Home Screen). Works fully offline once loaded.
+
 ## Run
 
 ```sh
@@ -53,6 +55,12 @@ Every mode records misses per unit in `localStorage`. Units you miss come up mor
 The world map is simplified to 40% of its vertices at rest and 7% while dragging or animating, so the globe stays smooth.
 
 Libraries: d3 7.9 and topojson 3.0.2 from cdnjs. No build step.
+
+## PWA
+
+`manifest.webmanifest` plus `sw.js` precache the app shell, the two CDN libraries and all map data (about 1.6 MB). `pwa.js` registers the worker, shows a reload toast when a new version is deployed, wires the Install button, and shows a one-time Add-to-Home-Screen hint on iOS. Bump `VERSION` in `sw.js` when shipping changes so clients pick them up.
+
+Deploys: GitHub Pages serves the `main` branch root. Push to `main` and the site updates in a minute or two.
 
 ## Automation hook
 
