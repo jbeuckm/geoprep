@@ -68,6 +68,8 @@ function shuffle(a) { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { co
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const normalize = s => s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
 const cssVar = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const flagCode = u => (u && u.level === 'world' && window.ISO_A2[u.name]) || null;
+const flagImg = (u, cls = 'flag') => { const c = flagCode(u); return c ? `<img class="${cls}" src="data/flags/${c}.svg" alt="" loading="lazy">` : ''; };
 
 // ---------- Persistent stats ----------
 const STORE = 'geodrill.v2';
@@ -142,6 +144,12 @@ function buildLevel(id, topo) {
     const stride = Math.max(1, Math.floor(v.length / 700));
     g.vertices = v.filter((_, i) => i % stride === 0);
     if (!isWorld) g.allVertices = v;
+    g.pieces = []; // centroid of each polygon, largest first, for ring markers on tiny units
+    for (const f of g.features) {
+      const polys = f.geometry.type === 'Polygon' ? [f.geometry.coordinates] : f.geometry.coordinates;
+      for (const poly of polys) { const geo = { type: 'Polygon', coordinates: poly }; g.pieces.push({ p: d3.geoCentroid(geo), a: d3.geoArea(geo) }); }
+    }
+    g.pieces = g.pieces.sort((x, y) => y.a - x.a).map(x => x.p);
     g.region = primaryRegion[g.name] || (isWorld ? 'Other' : '');
     g.playable = isWorld ? !NOT_PLAYABLE.has(g.name) : true;
     g.capital = caps.get(g.name) || null;
@@ -210,7 +218,7 @@ function pointToUnitDist(pt, c) {
   let best = Infinity; for (const q of c.vertices) { const d = haversine(pt, q); if (d < best) best = d; }
   return best;
 }
-function zoomForArea(area) { return Math.max(1, Math.min(10, 0.9 * Math.pow(0.05 / Math.max(area, 1e-7), 0.35))); }
+function zoomForArea(area) { return Math.max(1, Math.min(12, 0.9 * Math.pow(0.05 / Math.max(area, 1e-7), 0.35))); }
 // Zoom that fits a set of units: based on the angular radius of the group around its centroid.
 function frameZoom(units, fill = 0.8) {
   const fc = { type: 'FeatureCollection', features: units.flatMap(u => u.features) };
@@ -236,10 +244,42 @@ function frameWithLabels(units, points, fill = 0.75, maxBoost = 3) {
 }
 // Quiet name labels for the other units around a view, so the solution reads like a labelled map.
 function contextLabels(center, zoom, exclude, max = 30) {
-  const radius = 0.55 / zoom; // roughly the visible angular radius at this zoom
-  return CUR.units.filter(u => !exclude.has(u) && d3.geoDistance(u.centroid, center) < radius)
-    .sort((a, b) => b.area - a.area).slice(0, max)
-    .map(u => ({ p: u.centroid, label: u.name, textOnly: true }));
+  const radius = 1.0 / zoom; // roughly the visible angular radius at this zoom (corners reach a little further)
+  const out = [];
+  for (const u of CUR.units) {
+    if (exclude.has(u)) continue;
+    const dc = d3.geoDistance(u.centroid, center);
+    if (dc < radius * 0.7) { out.push({ u, p: u.centroid }); continue; }
+    if (dc > radius + 1.0) continue; // too far for any vertex to be in view
+    // Big neighbour whose centre is off-screen: label it at its nearest visible edge.
+    let best = null, bd = radius * 0.95;
+    for (const v of u.vertices) { const d = d3.geoDistance(v, center); if (d < bd) { bd = d; best = v; } }
+    if (best) out.push({ u, p: d3.geoInterpolate(best, center)(Math.min(0.5, 0.06 / Math.max(bd, 0.01))) });
+  }
+  return out.sort((a, b) => b.u.area - a.u.area).slice(0, max).map(x => ({ p: x.p, label: x.u.name, textOnly: true }));
+}
+// Zoom to frame one unit: by area, but widened for scattered archipelagos and capped for tiny units so nearby land gives context.
+function zoomForUnit(u) {
+  let z = zoomForArea(u.area);
+  let r = 0; for (const v of u.vertices) r = Math.max(r, d3.geoDistance(u.centroid, v));
+  if (r > 0) z = Math.min(z, 0.8 / r);
+  if (u.area < 3e-5) { // under ~1,200 km²: rings mark it; zoom out until sizeable land is in view for context
+    const big = nearestLargeLand(u);
+    if (big) z = Math.min(z, 0.75 / Math.max(big.dist, 0.05));
+    z = Math.min(z, 5);
+  }
+  return Math.max(1, z);
+}
+// Nearest unit with meaningful land area (> ~4,000 km²) and the angular distance to its closest vertex.
+function nearestLargeLand(u) {
+  let best = null;
+  for (const o of CUR.units) {
+    if (o === u || o.area < 1e-4) continue;
+    if (d3.geoDistance(u.centroid, o.centroid) > 1.2) continue;
+    let d = Infinity; for (const v of o.vertices) { const x = d3.geoDistance(u.centroid, v); if (x < d) d = x; }
+    if (!best || d < best.dist) best = { unit: o, dist: d };
+  }
+  return best;
 }
 function zoomForScope() {
   const units = pool(); if (!units.length) return CUR.def.homeZoom;
@@ -300,6 +340,19 @@ function render() {
   for (const c of CUR.units) {
     const s = G.stroke(c); if (!s) continue;
     ctx.beginPath(); geomOf(c).forEach(ft => G.path(ft)); ctx.strokeStyle = s; ctx.lineWidth = 2; ctx.stroke();
+  }
+  // Highlighted units too small to see at this zoom (atolls, microstates) get a ring around each island group.
+  const pxScale = (G.base * G.zoom) ** 2, center0 = [-G.rotate[0], -G.rotate[1]];
+  for (const c of CUR.units) {
+    const f = G.fill(c); if (!f || c.area * pxScale > 600) continue;
+    let n = 0;
+    for (const pt of c.pieces) {
+      if (n++ > 40) break;
+      if (d3.geoDistance(pt, center0) > Math.PI / 2 - 0.02) continue;
+      const [x, y] = G.projection(pt);
+      ctx.beginPath(); ctx.arc(x, y, 11, 0, 2 * Math.PI); ctx.strokeStyle = f; ctx.lineWidth = 2.5; ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, 2 * Math.PI); ctx.fillStyle = f; ctx.fill();
+    }
   }
   if (G.hoverName && G.hover) {
     const c = CUR.byName.get(G.hoverName) || WORLD.byName.get(G.hoverName);
@@ -452,7 +505,7 @@ function scopeLabel() { return (REGION === 'All' ? CUR.def.label.split(' · ')[0
 
 // ---------- Modes ----------
 const panel = document.getElementById('panel');
-const MODES = [['study', 'Study'], ['explore', 'Explore'], ['tap', 'Tap'], ['globle', 'Globle'], ['neighbors', 'Borders'], ['closer', 'Closer'], ['nameit', 'Name It']];
+const MODES = [['study', 'Study'], ['explore', 'Explore'], ['tap', 'Tap'], ['globle', 'Globle'], ['neighbors', 'Borders'], ['closer', 'Closer'], ['nameit', 'Name It'], ['flags', 'Flags']];
 let mode = null, S = {}, tourTimer = null;
 const nav = document.getElementById('nav');
 MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => setMode(id); nav.appendChild(b); });
@@ -461,7 +514,7 @@ function setMode(id) {
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   [...nav.children].forEach(b => b.classList.toggle('on', b.dataset.id === id));
   resetGlobe(); render();
-  ({ study: studyStart, explore, tap: tapStart, globle: globleStart, neighbors: neighborsStart, closer: closerStart, nameit: nameitStart })[id]();
+  ({ study: studyStart, explore, tap: tapStart, globle: globleStart, neighbors: neighborsStart, closer: closerStart, nameit: nameitStart, flags: flagsStart })[id]();
 }
 function coach(items) { return `<div class="coach"><b>Coach</b><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`; }
 function scopeLine() { return `<div class="scopeline">Scope: <b>${esc(scopeLabel())}</b> · ${pool().length} ${esc(CUR.def.units)}</div>`; }
@@ -474,12 +527,12 @@ function studyStart() {
   const grouped = {};
   for (const u of units) (grouped[u.region || 'All'] ||= []).push(u);
   const groups = Object.keys(grouped).sort();
-  const row = u => `<div class="urow" data-n="${esc(u.name)}"><span class="un">${esc(u.name)}</span><span class="uc muted">${u.capital ? esc(u.capital) : ''}</span><span class="ub muted">${u.neighbors.size ? u.neighbors.size + ' nb' : 'island'}${u.places && u.places.length ? ' · ' + u.places.length + ' pl' : ''}</span></div>`;
+  const row = u => `<div class="urow" data-n="${esc(u.name)}"><span class="un">${flagImg(u)}${esc(u.name)}</span><span class="uc muted">${u.capital ? esc(u.capital) : ''}</span><span class="ub muted">${u.neighbors.size ? u.neighbors.size + ' nb' : 'island'}${u.places && u.places.length ? ' · ' + u.places.length + ' pl' : ''}</span></div>`;
   panel.innerHTML = `<h2>Study guide</h2>
     ${scopeLine()}
     <p class="sub">Click a ${esc(CUR.def.unit)} to fly to it and see its neighbours. Then drill the same scope with the buttons below.</p>
     <div class="row" style="margin:6px 0 10px">
-      <button class="btn" data-m="tap">Tap</button><button class="btn" data-m="nameit">Name It</button><button class="btn" data-m="neighbors">Borders</button><button class="btn" data-m="globle">Globle</button>
+      <button class="btn" data-m="tap">Tap</button><button class="btn" data-m="nameit">Name It</button><button class="btn" data-m="neighbors">Borders</button><button class="btn" data-m="globle">Globle</button>${CUR.isWorld ? '<button class="btn" data-m="flags">Flags</button>' : ''}
       <button class="btn sec" id="tour">▶ Tour</button>
     </div>
     <div id="sinfo"></div>
@@ -505,12 +558,14 @@ function studyStart() {
     const pls = CUR.places.filter(pl => pl.units.includes(c));
     G.markers = pls.map(pl => ({ p: pl.p, color: pl.kind === 'capital' ? cssVar('--bad') : pl.kind === 'landmark' ? cssVar('--warn') : cssVar('--text'), r: pl.kind === 'capital' ? 6 : 4, label: pl.name }));
     const fr = frameWithLabels([c], pls.map(pl => pl.p), 0.8, 1.6);
-    flyTo(pls.length > 1 ? fr.center : c.centroid, Math.max(zoomForArea(c.area) * 0.9, fr.zoom));
+    const zc = Math.max(zoomForUnit(c) * 0.9, fr.zoom), cc = pls.length > 1 ? fr.center : c.centroid;
+    flyTo(cc, zc);
+    G.markers = G.markers.concat(contextLabels(cc, zc, new Set([c])));
     G.fill = x => x === c ? cssVar('--accent') : (x.level === c.level && c.neighbors.has(x.name)) ? '#f0a53a' : null;
     const nbs = [...c.neighbors].sort();
     panel.querySelectorAll('.urow').forEach(r => r.classList.toggle('on', r.dataset.n === c.name));
     const el = document.getElementById('sinfo');
-    el.innerHTML = `<div class="card"><div class="big">${esc(c.name)}</div>
+    el.innerHTML = `<div class="card"><div class="big">${flagImg(c, 'flag big')}${esc(c.name)}</div>
       <div class="small muted">${esc(c.region)}${c.capital ? ' · Capital: ' + esc(c.capital) : ''}</div>
       <div style="margin-top:6px"><b>Borders (${nbs.length}):</b> ${nbs.length ? nbs.map(esc).join(', ') : 'none — island or isolated'}</div>
       ${c.places && c.places.length ? `<div style="margin-top:4px"><b>Cities & places:</b> ${c.places.map(esc).join(', ')}</div>` : ''}</div>`;
@@ -532,10 +587,12 @@ function explore() {
   q.addEventListener('change', () => { const c = findUnit(q.value); if (c) showUnit(c); });
   G.onTap = p => { const c = unitAt(p); if (c) showUnit(c); };
   function showUnit(c) {
-    flyTo(c.centroid, zoomForArea(c.area));
+    const z = zoomForUnit(c);
+    flyTo(c.centroid, z);
+    G.markers = contextLabels(c.centroid, z, new Set([c]));
     G.fill = x => x === c ? cssVar('--accent') : (x.level === c.level && c.neighbors.has(x.name)) ? '#f0a53a' : null;
     const nbs = [...c.neighbors].sort();
-    document.getElementById('exinfo').innerHTML = `<div class="card"><div class="big">${esc(c.name)}</div>
+    document.getElementById('exinfo').innerHTML = `<div class="card"><div class="big">${flagImg(c, 'flag big')}${esc(c.name)}</div>
       <div class="small muted">${esc(c.region)}${c.capital ? ' · Capital: ' + esc(c.capital) : ''}</div>
       <div style="margin-top:6px"><b>Borders (${nbs.length}):</b> ${nbs.length ? nbs.map(esc).join(', ') : 'none — island or isolated'}</div>
       ${c.places && c.places.length ? `<div style="margin-top:4px"><b>Cities & places:</b> ${c.places.map(esc).join(', ')}</div>` : ''}</div>`;
@@ -574,7 +631,7 @@ function tapRender() {
     ${scopeLine()}
     <div class="row small muted"><span>Question ${idx} / ${S.n}</span><span>·</span><span>Round score ${total}</span></div>
     <div class="scorebar"><i style="width:${total / S.n}%"></i></div>
-    <div class="prompt">${esc(label)}</div>
+    <div class="prompt">${q.kind === 'unit' ? flagImg(q.c, 'flag big') : ''}${esc(label)}</div>
     <div class="hint">${esc(kindTxt)}${q.kind === 'place' ? ` · <a href="#" id="revealc">show ${esc(CUR.def.unit)}</a>` : ''}</div>
     <p class="sub">Rotate and zoom the globe, then tap where it is. Inside the border = 100; otherwise points fall off with distance.</p>
     <div id="tapfb"></div>
@@ -610,8 +667,11 @@ function tapAnswer(p) {
   G.hover = true;
   // Frame both dots: pick a zoom where the miss spans roughly a third of the globe view, so near misses are still visible.
   const mid = d3.geoInterpolate(p, target)(0.5);
-  if (inside) flyTo(target, q.kind === 'unit' ? Math.max(1.2, zoomForArea(q.c.area) * 0.9) : Math.max(G.zoom, 6));
-  else { const theta = d3.geoDistance(p, target); flyTo(mid, Math.max(1, Math.min(48, 0.7 / Math.max(theta, 1e-4)))); }
+  let zt, ct;
+  if (inside) { ct = target; zt = q.kind === 'unit' ? Math.max(1.2, zoomForUnit(q.c) * 0.9) : Math.max(G.zoom, 6); }
+  else { const theta = d3.geoDistance(p, target); ct = mid; zt = Math.max(1, Math.min(48, 0.7 / Math.max(theta, 1e-4))); }
+  flyTo(ct, zt);
+  G.markers = G.markers.concat(contextLabels(ct, zt, new Set(q.kind === 'unit' ? [q.c] : q.pl.units)));
   const cls = score >= 80 ? 'ok' : score >= 40 ? 'warn' : 'bad';
   const msg = inside ? (q.kind === 'unit' ? 'Inside the border. Full marks.' : 'Dead on.') : `You were <b>${fmtKm(d)}</b> off${q.kind === 'unit' ? ' from the border' : ''}.`;
   const done = S.round.length >= S.n;
@@ -654,7 +714,7 @@ function globleRender() {
     <div class="hint" id="gmsg"></div>`}
     <div class="row small muted" style="margin-top:6px"><span>Guesses: <b>${S.guesses.length}</b></span><span>·</span><span>Games: ${games.length}</span><span>·</span><span>Avg guesses: ${avg}</span></div>
     <div id="gres"></div>
-    <ul class="glist">${sorted.map(g => `<li><span class="sw" style="background:${g.c === S.target ? cssVar('--ok') : globleColor(g.d)}"></span>${esc(g.c.name)}<span class="d">${g.c === S.target ? 'found' : g.d === 0 ? 'borders it' : fmtKm(g.d)}</span></li>`).join('')}</ul>
+    <ul class="glist">${sorted.map(g => `<li><span class="sw" style="background:${g.c === S.target ? cssVar('--ok') : globleColor(g.d)}"></span>${flagImg(g.c)}${esc(g.c.name)}<span class="d">${g.c === S.target ? 'found' : g.d === 0 ? 'borders it' : fmtKm(g.d)}</span></li>`).join('')}</ul>
     <div class="row">${S.done ? '<button class="btn" id="gnew">New game</button>' : '<button class="btn sec" id="ghint">Hint: region</button> <button class="btn sec" id="ggive">Give up</button>'}</div>
     ${coach(['Open with one guess per continent, spread out: e.g. Mexico, Germany, Egypt, India, Australia. Three or four openers anchor the search.',
       'Treat your warmest guess as the anchor and walk its borders. Dark red means you share a border: list that country\'s neighbours and pick one that explains all previous colours.',
@@ -690,11 +750,13 @@ function globleEnd(won) {
   if (won) STATS.globle.push(S.guesses.length);
   mark(S.target, !won || S.guesses.length > 8); save();
   globleRender();
-  flyTo(S.target.centroid, Math.max(1.2, zoomForArea(S.target.area) * 0.8));
+  const zg = Math.max(1.2, zoomForUnit(S.target) * 0.8);
+  flyTo(S.target.centroid, zg);
+  G.markers = contextLabels(S.target.centroid, zg, new Set([S.target]));
   G.hover = true;
   const nbs = [...S.target.neighbors].sort();
   document.getElementById('gres').innerHTML = `<div class="card ${won ? 'ok' : 'bad'}"><div class="big">${won ? `Solved in ${S.guesses.length}` : 'Gave up'}</div>
-    <div>It was <b>${esc(S.target.name)}</b>${S.target.region ? ' (' + esc(S.target.region) + ')' : ''}.</div>
+    <div>It was ${flagImg(S.target)}<b>${esc(S.target.name)}</b>${S.target.region ? ' (' + esc(S.target.region) + ')' : ''}.</div>
     <div class="small muted" style="margin-top:4px">Borders: ${nbs.length ? nbs.map(esc).join(', ') : 'none'}</div></div>`;
 }
 
@@ -709,7 +771,7 @@ function neighborsStart() {
     .sort((a, b) => haversine(a.centroid, t.centroid) - haversine(b.centroid, t.centroid)).slice(0, nDistract);
   S.options = shuffle([...actual, ...distract]);
   S.actual = new Set(actual.map(c => c.name));
-  flyTo(t.centroid, Math.max(CUR.def.homeZoom, zoomForArea(t.area) * 0.7));
+  flyTo(t.centroid, Math.max(CUR.def.homeZoom, zoomForUnit(t) * 0.7));
   G.fill = c => c === t ? cssVar('--accent') : null;
   neighborsRender();
 }
@@ -717,14 +779,14 @@ function neighborsRender() {
   const t = S.target;
   const chip = c => { const on = S.sel.has(c.name); let cls = on ? 'on' : '';
     if (S.checked) cls = S.actual.has(c.name) ? (on ? 'ok' : 'miss') : (on ? 'bad' : '');
-    return `<button class="chip ${cls}" data-n="${esc(c.name)}">${esc(c.name)}</button>`; };
+    return `<button class="chip ${cls}" data-n="${esc(c.name)}">${flagImg(c)}${esc(c.name)}</button>`; };
   const noneOn = S.sel.has('__none'); let noneCls = noneOn ? 'on' : '';
   if (S.checked) noneCls = S.actual.size === 0 ? (noneOn ? 'ok' : 'miss') : (noneOn ? 'bad' : '');
   const st = STATS.streaks.neighbors || 0;
   panel.innerHTML = `<h2>Borders <span class="muted small">· Globle fundamentals</span></h2>
     ${scopeLine()}
     <p class="sub">Select every ${esc(CUR.def.unit)} that shares a land border with the highlighted one, then check.</p>
-    <div class="prompt">${esc(t.name)}</div><div class="hint">${esc(t.region || '')} · streak ${st}</div>
+    <div class="prompt">${flagImg(t, 'flag big')}${esc(t.name)}</div><div class="hint">${esc(t.region || '')} · streak ${st}</div>
     <div class="chips">${S.options.map(chip).join('')}<button class="chip ${noneCls}" data-n="__none">No land borders</button></div>
     <div id="nbfb"></div>
     <div class="row">${S.checked ? '<button class="btn" id="nbnext">Next</button>' : '<button class="btn" id="nbcheck">Check</button> <button class="btn sec" id="nbskip">Skip</button>'}</div>
@@ -787,8 +849,8 @@ function closerRender() {
     ${scopeLine()}
     <p class="sub">Which of the two is closer to the target? Distance is border-to-border, as in Globle.</p>
     <div class="hint">Streak ${st}</div>
-    <div class="prompt">${esc(S.x.name)}</div>
-    <div class="opts" id="copts"><button class="btn" data-k="a">${esc(S.a.name)}</button><button class="btn" data-k="b">${esc(S.b.name)}</button></div>
+    <div class="prompt">${flagImg(S.x, 'flag big')}${esc(S.x.name)}</div>
+    <div class="opts" id="copts"><button class="btn" data-k="a">${flagImg(S.a)}${esc(S.a.name)}</button><button class="btn" data-k="b">${flagImg(S.b)}${esc(S.b.name)}</button></div>
     <div id="cfb"></div>
     ${coach(['Think in border hops, not map inches: Globle colours come from the nearest edges of two countries.',
       'Big countries are "close" to a lot: Russia is near Japan, Norway, Alaska and North Korea at once.',
@@ -822,7 +884,9 @@ function nameitStart() {
   const near = CUR.playable.filter(c => c !== t).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid)).slice(0, 10);
   S.t = t; S.opts = shuffle([t, ...shuffle(near).slice(0, 3)]); S.answered = false;
   G.fill = c => c === t ? cssVar('--accent') : null;
-  flyTo(t.centroid, Math.max(CUR.def.homeZoom, zoomForArea(t.area) * 0.8));
+  const zn = Math.max(CUR.def.homeZoom, zoomForUnit(t) * 0.8);
+  flyTo(t.centroid, zn);
+  G.markers = contextLabels(t.centroid, zn, new Set(S.opts)); // orientation without giving away the options
   nameitRender();
 }
 function nameitRender() {
@@ -844,11 +908,59 @@ function nameitAnswer(i) {
   mark(S.t, !correct); save();
   panel.querySelectorAll('#nopts .btn').forEach(b => { const c = S.opts[+b.dataset.i]; if (c === S.t) b.classList.add('ok'); else if (+b.dataset.i === i) b.classList.add('bad'); });
   G.hover = true;
+  G.markers = contextLabels(S.t.centroid, G.zoom, new Set([S.t])).concat(S.opts.filter(c => c !== S.t).map(c => ({ p: c.centroid, label: c.name, textOnly: true })));
+  render();
   const nbs = [...S.t.neighbors].sort();
-  document.getElementById('nfb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${correct ? 'Correct' : 'It was ' + esc(S.t.name)}</div>
+  document.getElementById('nfb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${flagImg(S.t, 'flag big')}${correct ? 'Correct' : 'It was ' + esc(S.t.name)}</div>
     <div class="small muted">${esc(S.t.region || '')}${S.t.capital ? ' · Capital: ' + esc(S.t.capital) : ''}${nbs.length ? ' · Borders: ' + nbs.map(esc).join(', ') : ' · No land borders'}</div>
     <div style="margin-top:8px"><button class="btn" id="nnext">Next</button></div></div>`;
   document.getElementById('nnext').onclick = () => { resetGlobe(); nameitStart(); };
+  render();
+}
+
+// ----- Flags -----
+function flagsStart() {
+  if (!CUR.isWorld) {
+    panel.innerHTML = `<h2>Flags</h2><p class="sub">Flags are available on the World level.</p><div class="row"><button class="btn" id="toworld">Switch to World</button></div>`;
+    document.getElementById('toworld').onclick = () => setLevel('world');
+    return;
+  }
+  const cands = pool().filter(flagCode);
+  if (cands.length < 4 && CUR.playable.filter(flagCode).length < 4) return noScope();
+  const t = weightedPick(cands.length ? cands : CUR.playable.filter(flagCode));
+  const near = CUR.playable.filter(c => c !== t && flagCode(c)).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid)).slice(0, 12);
+  S.t = t; S.opts = shuffle([t, ...shuffle(near).slice(0, 3)]); S.answered = false;
+  flagsRender();
+}
+function flagsRender() {
+  const st = STATS.streaks.flags || 0;
+  panel.innerHTML = `<h2>Flags <span class="muted small">· whose flag?</span></h2>
+    ${scopeLine()}
+    <p class="sub">Name the country. Options are neighbours, so similar regional flags are the test.</p>
+    <div class="hint">Streak ${st}</div>
+    <div class="flagstage"><img src="data/flags/${flagCode(S.t)}.svg" alt="Flag to identify"></div>
+    <div class="opts" id="fopts">${S.opts.map((c, i) => `<button class="btn" data-i="${i}">${esc(c.name)}</button>`).join('')}</div>
+    <div id="ffb"></div>
+    ${coach(['Group flags by family: Pan-African (green, yellow, red), Pan-Arab (red, white, black, green), Nordic crosses, Pan-Slavic tricolours, Central American blue-white-blue.',
+      'Lookalikes worth drilling: Chad/Romania, Indonesia/Monaco, Australia/New Zealand, Ireland/Côte d\'Ivoire, Norway/Iceland, Senegal/Mali/Guinea.'])}`;
+  panel.querySelectorAll('#fopts .btn').forEach(b => b.onclick = () => flagsAnswer(+b.dataset.i));
+}
+function flagsAnswer(i) {
+  if (S.answered) return; S.answered = true;
+  const correct = S.opts[i] === S.t;
+  STATS.streaks.flags = correct ? (STATS.streaks.flags || 0) + 1 : 0;
+  mark(S.t, !correct); save();
+  panel.querySelectorAll('#fopts .btn').forEach(b => { const c = S.opts[+b.dataset.i]; if (c === S.t) b.classList.add('ok'); else if (+b.dataset.i === i) b.classList.add('bad'); });
+  G.fill = c => c === S.t ? cssVar('--accent') : null;
+  const z = Math.max(1, zoomForUnit(S.t) * 0.8);
+  flyTo(S.t.centroid, z);
+  G.markers = contextLabels(S.t.centroid, z, new Set([S.t]));
+  G.hover = true;
+  const nbs = [...S.t.neighbors].sort();
+  document.getElementById('ffb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${correct ? 'Correct' : 'It was ' + esc(S.t.name)}</div>
+    <div class="small muted">${esc(S.t.region || '')}${S.t.capital ? ' · Capital: ' + esc(S.t.capital) : ''}${nbs.length ? ' · Borders: ' + nbs.map(esc).join(', ') : ' · No land borders'}</div>
+    <div style="margin-top:8px"><button class="btn" id="fnext">Next</button></div></div>`;
+  document.getElementById('fnext').onclick = () => { resetGlobe(); flagsStart(); };
   render();
 }
 
@@ -868,7 +980,7 @@ document.getElementById('statsbtn').onclick = () => {
     <div class="stat"><span>Tap rounds</span><b>${t.length}</b></div><div class="stat"><span>Tap avg / best (of 500)</span><b>${tavg} / ${tbest}</b></div>
     <div class="stat"><span>${esc(CUR.def.units)} met in this level</span><b>${seen} / ${CUR.playable.length}</b></div></div>
     <h2 style="margin-top:14px">Weak spots</h2>
-    ${weak.length ? weak.map(r => `<div class="stat"><span>${esc(r.name)} <span class="muted small">${r.level === 'world' ? '' : esc(LEVEL_DEFS[r.level].label.split(' · ')[0])}</span></span><b>${Math.round(r.rate * 100)}% missed <span class="muted">(${r.seen})</span></b></div>`).join('') : '<p class="muted small">Play a few rounds; units you miss twice or more show up here, and come up more often in every mode.</p>'}
+    ${weak.length ? weak.map(r => `<div class="stat"><span>${r.level === 'world' ? flagImg(WORLD.byName.get(r.name)) : ''}${esc(r.name)} <span class="muted small">${r.level === 'world' ? '' : esc(LEVEL_DEFS[r.level].label.split(' · ')[0])}</span></span><b>${Math.round(r.rate * 100)}% missed <span class="muted">(${r.seen})</span></b></div>`).join('') : '<p class="muted small">Play a few rounds; units you miss twice or more show up here, and come up more often in every mode.</p>'}
     <div class="row" style="margin-top:14px"><button class="btn sec" id="reset">Reset all stats</button></div>`;
   document.getElementById('reset').onclick = () => { if (confirm('Erase all progress?')) { STATS = { units: {}, globle: [], tap: [], streaks: {} }; save(); document.getElementById('statsbtn').click(); } };
   render();

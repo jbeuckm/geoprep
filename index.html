@@ -99,6 +99,11 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
 .small{font-size:13px}
 #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:15px;background:color-mix(in srgb,var(--bg) 60%,transparent);pointer-events:none}
 #scope{display:flex;gap:6px}
+.flag{width:22px;height:16.5px;object-fit:cover;border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.15);vertical-align:-3px;margin-right:7px;flex:none}
+.flag.big{width:36px;height:27px;vertical-align:-5px;margin-right:10px}
+.flagstage{display:flex;justify-content:center;margin:10px 0 14px}
+.flagstage img{width:min(100%,300px);aspect-ratio:4/3;object-fit:cover;border-radius:6px;box-shadow:0 2px 10px rgba(0,0,0,.25)}
+.urow .un{display:flex;align-items:center}
 #scope select{background:var(--chip);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;font-size:13px;max-width:200px}
 .scopeline{font-size:13px;color:var(--muted);margin:0 0 8px}
 .ulist{margin:8px 0;max-height:46vh;overflow:auto;border:1px solid var(--line);border-radius:8px}
@@ -140,6 +145,7 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js" crossorigin="anonymous"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js" crossorigin="anonymous"></script>
+<script src="data/iso.js"></script>
 <script src="data/places.js"></script>
 <script src="data/regions.js"></script>
 <script src="data/subcapitals.js"></script>

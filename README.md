@@ -41,7 +41,8 @@ Two dropdowns in the header set what every mode uses:
 | Globle | Unlimited Globle replica on the current level and scope. Border-to-border distances, same colour logic, region hint, give-up reveal | Globle |
 | Borders | Pick every land neighbour of a unit from nearby distractors, or "no land borders" | Globle |
 | Closer | Which of two nearby units is closer to the target (border distance) | Globle |
-| Name It | A unit is highlighted with no labels; choose its name from four nearby options | MapTap |
+| Name It | A unit is highlighted with no labels; choose its name from four nearby options. Nearby countries outside the options are labelled for orientation | MapTap |
+| Flags | A national flag; choose the country from four regional neighbours (world level) | both |
 
 Every mode records misses per unit in `localStorage`. Units you miss come up more often in all modes, and the **Stats** view maps them green-to-red and lists the weakest.
 
@@ -51,6 +52,7 @@ Every mode records misses per unit in `localStorage`. Units you miss come up mor
 - `data/admin1/*.json`: Natural Earth 1:50m admin-1 (Russia from 1:10m, simplified). Crimea and Sevastopol are excluded from the Russia level.
 - `data/places.js`, `data/subcapitals.js`, `data/subcities.js`: hand-entered coordinates.
 - `data/regions.js`: continent, study-region and sub-national region membership.
+- `data/iso.js` + `data/flags/*.svg`: ISO alpha-2 codes and 227 flags vendored from the MIT-licensed flag-icons package (4:3).
 
 The world map is simplified to 40% of its vertices at rest and 7% while dragging or animating, so the globe stays smooth.
 
