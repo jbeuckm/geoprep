@@ -952,8 +952,10 @@ function globleEnd(won) {
 // ----- Borders (neighbours) -----
 function neighborsStart() {
   if (!pool().length) return noScope();
+  // Prefer units with land neighbours, but only when there are enough of them; island-heavy scopes keep their islands.
   const withNb = pool().filter(u => u.neighbors.size);
-  const t = pickTarget(withNb.length && Math.random() < 0.8 ? withNb : pool());
+  const share = withNb.length >= 5 ? 0.8 : withNb.length / Math.max(pool().length, 1) + 0.25;
+  const t = pickTarget(withNb.length && Math.random() < share ? withNb : pool());
   S.target = t; S.sel = new Set(); S.checked = false;
   const actual = [...t.neighbors].map(n => CUR.byName.get(n)).filter(c => c && c.playable);
   const nDistract = Math.max(3, actual.length);
