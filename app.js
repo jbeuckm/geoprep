@@ -3,7 +3,7 @@
    Scope: any level can be narrowed to a region; every drill and the study guide respect it. */
 (() => {
 'use strict';
-const APP_VERSION = 'v24'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v25'; // keep in step with VERSION in sw.js
 
 // ---------- Names (world level) ----------
 const RENAME = {
@@ -895,6 +895,7 @@ function fillRegionSelect() {
   if (CUR.isWorld) { add('Continents', Object.keys(window.WORLD_CONTINENTS).filter(k => k !== 'Antarctica')); add('Study regions', Object.keys(window.WORLD_REGIONS)); }
   else add('Regions', Object.keys(CUR.regions));
   regionSel.value = REGION; regionSel.disabled = regionSel.options.length <= 1;
+  updateScopeBtn();
 }
 async function loadLevel(id) {
   if (LEVELS[id]) return LEVELS[id];
@@ -922,6 +923,220 @@ levelSel.onchange = () => { stashView(); trainStop(true); setLevel(levelSel.valu
 regionSel.onchange = () => { stashView(); trainStop(true); REGION = regionSel.value; if (mode === 'stats') return openStats(); flyHome(); setMode(mode === 'train' ? 'study' : mode); };
 function scopeLabel() { return (REGION === 'All' ? CUR.def.label.split(' · ')[0] : REGION); }
 
+// ---------- Region picker: a map of the level, coloured by region; tap a region to practise it ----------
+const picker = document.getElementById('picker'), scopeBtn = document.getElementById('scopebtn');
+const PK_COLORS = ['#4e79a7', '#f28e2b', '#59a14f', '#e15759', '#76b7b2', '#edc948', '#b07aa1', '#ff9da7', '#9c755f'];
+const lvName = id => LEVEL_DEFS[id].label.split(' · ')[0];
+let PK = null; // picker state while open
+function updateScopeBtn() {
+  if (!CUR) return;
+  const lv = lvName(CUR.id);
+  scopeBtn.innerHTML = `<svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><path d="M1 3.5l4.5-2 5 2 4.5-2v11l-4.5 2-5-2-4.5 2z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/><path d="M5.5 1.5v11M10.5 3.5v11" stroke="currentColor" stroke-width="1.4"/></svg><span class="sb-t"><b>${esc(lv)}</b>${REGION === 'All' ? '' : ' · ' + esc(REGION)}</span><span aria-hidden="true">▾</span>`;
+  scopeBtn.setAttribute('aria-label', `Region: ${lv}${REGION === 'All' ? '' : ', ' + REGION}. Change region`);
+}
+scopeBtn.onclick = () => openPicker();
+document.addEventListener('click', e => { const b = e.target.closest && e.target.closest('[data-pick]'); if (b) { e.preventDefault(); openPicker(); } });
+function openPicker() {
+  if (!CUR) return;
+  PK = { level: CUR.id, layer: CUR.isWorld && window.WORLD_REGIONS[REGION] ? 'study' : 'continents', back: document.activeElement };
+  picker.hidden = false; document.body.classList.add('picking');
+  drawPicker(); picker.querySelector('.pk-close').focus();
+}
+function closePicker() {
+  if (!PK) return; const back = PK.back; PK = null;
+  picker.hidden = true; document.body.classList.remove('picking');
+  if (back && back.focus) back.focus();
+}
+// Switch level and/or region by hand: same effect as the old dropdowns. From Train, it opens the study guide.
+function applyScope(level, region) {
+  stashView(); trainStop(true);
+  const next = mode === 'train' ? 'study' : null;
+  if (level !== CUR.id) return setLevel(level, region, next);
+  REGION = region; fillRegionSelect();
+  if (mode === 'stats') return openStats();
+  flyHome(); setMode(next || mode);
+}
+function pickerChoose(i) {
+  const P = PK; if (!P || !P.regs) return;
+  const level = P.level, region = i < 0 || P.regs[i].name === 'All' ? 'All' : P.regs[i].name;
+  closePicker();
+  if (level === CUR.id && region === REGION && mode !== 'train') return;
+  applyScope(level, region);
+}
+function pickerProjection(L) {
+  if (L.isWorld) return d3.geoNaturalEarth1();
+  if (L.id === 'usa') return d3.geoAlbersUsa();
+  if (L.id === 'canada') return d3.geoConicConformal().parallels([49, 77]).rotate([96, 0]);
+  if (L.id === 'russia') return d3.geoConicEqualArea().parallels([52, 72]).rotate([-100, 0]);
+  return d3.geoMercator().rotate([-L.def.home[0], 0]);
+}
+function pickerRegions(L, layer) {
+  const names = !L.isWorld ? Object.keys(L.regions)
+    : layer === 'study' ? Object.keys(window.WORLD_REGIONS) : Object.keys(window.WORLD_CONTINENTS).filter(k => k !== 'Antarctica');
+  const regs = names.map(n => ({ name: n, set: new Set(L.regions[n].filter(x => L.byName.has(x))) })).filter(r => r.set.size);
+  // A level without regional groups is one big region: the whole level.
+  return regs.length ? regs : [{ name: 'All', set: new Set(L.units.map(u => u.name)) }];
+}
+// Neighbouring regions get different colours (greedy colouring of the region adjacency graph).
+function colorRegions(L, regs) {
+  const of = new Map();
+  regs.forEach((r, i) => r.set.forEach(n => { if (!of.has(n)) of.set(n, []); of.get(n).push(i); }));
+  const adj = regs.map(() => new Set());
+  regs.forEach((r, i) => r.set.forEach(n => {
+    for (const j of of.get(n) || []) if (j !== i) adj[i].add(j);
+    const u = L.byName.get(n); if (u) for (const m of u.neighbors) for (const j of of.get(m) || []) if (j !== i) adj[i].add(j);
+  }));
+  if (regs.length <= PK_COLORS.length) return { of, col: regs.map((_, i) => i) }; // few regions: every one its own colour
+  const col = [], uses = PK_COLORS.map(() => 0);
+  for (const i of regs.map((_, i) => i).sort((a, b) => adj[b].size - adj[a].size)) {
+    const used = new Set([...adj[i]].map(j => col[j]));
+    const free = PK_COLORS.map((_, c) => c).filter(c => !used.has(c));
+    const c = (free.length ? free : PK_COLORS.map((_, c) => c)).sort((a, b) => uses[a] - uses[b])[0]; // least-used free colour
+    col[i] = c; uses[c]++;
+  }
+  return { of, col };
+}
+async function drawPicker() {
+  const P = PK; if (!P) return;
+  const tok = P.tok = {};
+  const lvEl = picker.querySelector('.pk-levels'), lyEl = picker.querySelector('.pk-layers'), mapEl = picker.querySelector('.pk-map'),
+    info = picker.querySelector('.pk-info'), chips = picker.querySelector('.pk-chips');
+  lvEl.innerHTML = Object.keys(LEVEL_DEFS).map(k => `<button class="chip${k === P.level ? ' on' : ''}" data-lv="${k}" aria-pressed="${k === P.level}">${esc(lvName(k))}</button>`).join('');
+  let L = LEVELS[P.level];
+  if (!L) {
+    mapEl.innerHTML = '<div class="pk-wait">Loading map…</div>'; lyEl.innerHTML = chips.innerHTML = info.innerHTML = ''; P.regs = null;
+    try { L = await loadLevel(P.level); } catch (e) { if (PK === P && P.tok === tok) mapEl.innerHTML = '<div class="pk-wait">Could not load this map. Check your connection.</div>'; return; }
+    if (PK !== P || P.tok !== tok) return;
+  }
+  lyEl.innerHTML = L.isWorld ? `<span class="muted small">Group by</span>` + [['continents', 'Continents'], ['study', 'Study regions']].map(([k, t]) => `<button class="chip${P.layer === k ? ' on' : ''}" data-layer="${k}" aria-pressed="${P.layer === k}">${t}</button>`).join('') : '';
+  const regs = P.regs = pickerRegions(L, P.layer), { of, col } = colorRegions(L, regs);
+  const whole = regs.length === 1 && regs[0].name === 'All';
+  const cur = P.level === CUR.id ? regs.findIndex(r => r.name === REGION) : -1;
+  P.hover = null; P.pick = null; P.hoverUnit = null;
+
+  // Map
+  const units = L.units.filter(u => u.name !== 'Antarctica');
+  const fcOf = u => ({ type: 'FeatureCollection', features: u.featuresCoarse });
+  const all = { type: 'FeatureCollection', features: units.flatMap(u => u.featuresCoarse) };
+  const w = Math.max(260, Math.round(mapEl.clientWidth || 600)), proj = pickerProjection(L);
+  let h;
+  if (L.isWorld) h = Math.round(w * 0.5);
+  else {
+    proj.fitWidth(w - 16, all); const b = d3.geoPath(proj).bounds(all);
+    h = Math.round(Math.min(Math.max(b[1][1] - b[0][1] + 16, w * 0.45), Math.max(240, innerHeight * 0.5), w * 0.95));
+  }
+  proj.fitExtent([[8, 8], [w - 8, h - 8]], all);
+  const path = d3.geoPath(proj);
+  const data = units.map(u => { const fc = fcOf(u); return { u, regs: of.get(u.name) || [], d: path(fc), a: path.area(fc), c: path.centroid(fc), b: path.bounds(fc) }; }).filter(x => x.d);
+  const svg = d3.select(mapEl).html('').append('svg').attr('viewBox', `0 0 ${w} ${h}`).attr('height', h)
+    .attr('role', 'img').attr('aria-label', `Map of ${lvName(L.id)}${whole ? '' : ' by region'}`);
+  const shapes = svg.append('g').selectAll('path').data(data).join('path').attr('class', 'u').attr('d', x => x.d);
+  const dots = svg.append('g').selectAll('circle').data(data.filter(x => x.a < 12 && isFinite(x.c[0]))).join('circle').attr('class', 'u dot').attr('r', 3.2).attr('cx', x => x.c[0]).attr('cy', x => x.c[1]);
+  // A dashed ring around the highlighted region when it is too small to see (island groups, microstates).
+  const ring = svg.append('rect').attr('class', 'ring').attr('rx', 10).style('display', 'none');
+  const regBox = regs.map(r => { const m = data.filter(x => r.set.has(x.u.name) && isFinite(x.b[0][0])); if (!m.length) return null;
+    return [d3.min(m, x => x.b[0][0]), d3.min(m, x => x.b[0][1]), d3.max(m, x => x.b[1][0]), d3.max(m, x => x.b[1][1]), d3.sum(m, x => x.a)]; });
+  // Region names, biggest first, skipping any that would collide.
+  if (!whole) {
+    const fs = w < 520 ? 10 : 11, boxes = [];
+    const labelled = regs.map((r, i) => {
+      let names = [...r.set]; if (L.isWorld && names.length > 1) names = names.filter(n => n !== 'Russia'); // Russia would drag Europe's label into Siberia
+      const fc = { type: 'FeatureCollection', features: names.flatMap(n => L.byName.get(n).featuresCoarse) };
+      return { i, name: r.name, c: path.centroid(fc), a: path.area(fc) };
+    }).filter(x => isFinite(x.c[0])).sort((a, b) => b.a - a.a);
+    const lg = svg.append('g');
+    for (const x of labelled) {
+      const tw = x.name.length * fs * 0.56 + 6, bx = [x.c[0] - tw / 2, x.c[1] - fs * 0.7, x.c[0] + tw / 2, x.c[1] + fs * 0.7];
+      if (bx[0] < 2 || bx[2] > w - 2 || bx[1] < 2 || bx[3] > h - 2) continue;
+      if (boxes.some(b => bx[0] < b[2] && bx[2] > b[0] && bx[1] < b[3] && bx[3] > b[1])) continue;
+      boxes.push(bx);
+      lg.append('text').attr('class', 'lbl').attr('x', x.c[0]).attr('y', x.c[1]).attr('dy', '0.35em').attr('text-anchor', 'middle').style('font-size', fs + 'px').text(x.name);
+    }
+  }
+  const unitWord = n => n === 1 ? L.def.unit : L.def.units;
+  const paint = () => {
+    const hl = P.hover != null ? P.hover : P.pick != null ? P.pick : cur >= 0 ? cur : null;
+    const inHl = x => hl != null && regs[hl].set.has(x.u.name);
+    const fill = x => inHl(x) ? PK_COLORS[col[hl]] : x.regs.length ? PK_COLORS[col[x.regs[0]]] : 'var(--muted)';
+    const dim = P.hover != null || P.pick != null ? 0.28 : 0.5; // just showing the current region: dim the rest less
+    const op = x => hl == null ? (x.regs.length ? 0.72 : 0.25) : inHl(x) ? 1 : (x.regs.length ? dim : 0.15);
+    shapes.style('fill', fill).style('fill-opacity', op).classed('hl', inHl);
+    dots.style('fill', fill).style('fill-opacity', x => Math.max(op(x), 0.5)).classed('hl', inHl).attr('r', x => inHl(x) ? 4.5 : 3.2);
+    shapes.filter(inHl).raise(); dots.filter(inHl).raise();
+    const bb = hl != null && !whole && regBox[hl];
+    if (bb && bb[4] < w * h * 0.004) ring.style('display', null).attr('x', bb[0] - 9).attr('y', bb[1] - 9).attr('width', bb[2] - bb[0] + 18).attr('height', bb[3] - bb[1] + 18);
+    else ring.style('display', 'none');
+    chips.querySelectorAll('[data-ri]').forEach(b => { const i = +b.dataset.ri; b.classList.toggle('hl', i === hl || (i < 0 && whole)); });
+    const hu = P.hoverUnit;
+    if (hl != null) {
+      const r = regs[hl], n = [...r.set].filter(nm => L.byName.get(nm).playable).length;
+      const label = r.name === 'All' ? 'All of ' + lvName(L.id) : r.name;
+      const also = hu && hu.regs.length > 1 ? ` <span class="muted">· ${esc(hu.u.name)} is also in ${esc(hu.regs.filter(j => j !== hl).map(j => regs[j].name).join(', '))}</span>` : hu ? ` <span class="muted">· ${esc(hu.u.name)}</span>` : '';
+      const isCur = hl === cur && P.hover == null && P.pick == null;
+      info.innerHTML = `<span><b>${esc(label)}</b> · ${n} ${esc(unitWord(n))}${isCur ? ' <span class="muted">(current)</span>' : ''}${also}</span>`
+        + `<button class="btn" data-ri="${hl}">${isCur ? 'Keep' : 'Choose'} ${esc(label)}</button>`;
+    } else if (hu) {
+      info.innerHTML = `<span><b>${esc(hu.u.name)}</b> <span class="muted">isn't in any of these regions${L.isWorld && P.layer === 'study' ? '. Try Continents' : ''}.</span></span>`;
+    } else info.innerHTML = `<span class="muted">${whole ? `${esc(lvName(L.id))} has no regional groups: practise the whole map.` : 'Tap a region on the map, or pick one below.'}</span>`;
+  };
+  // Mouse: hover previews, click chooses. Touch: first tap previews, a second tap (or the button) chooses.
+  const unitAt = e => (e.target.classList && e.target.classList.contains('u')) ? e.target.__data__ : null;
+  const pop = mapEl.appendChild(document.createElement('div')); pop.className = 'pk-pop'; pop.hidden = true;
+  svg.on('pointerdown', e => { P.ptype = e.pointerType; });
+  svg.on('pointermove', e => {
+    if (e.pointerType !== 'mouse' || !pop.hidden) return;
+    const x = unitAt(e);
+    P.hoverUnit = x; P.hover = x && x.regs.length ? (x.regs.includes(P.hover) ? P.hover : x.regs[0]) : null; paint();
+  });
+  svg.on('pointerleave', () => { if (!pop.hidden) return; P.hover = null; P.hoverUnit = null; paint(); });
+  svg.on('click', e => {
+    if (!pop.hidden) { pop.hidden = true; return; }
+    const x = unitAt(e); if (!x) return;
+    if (!x.regs.length) { P.hoverUnit = x; P.pick = null; paint(); return; }
+    if (x.regs.length > 1) { // member of several study regions: ask which
+      const rect = mapEl.getBoundingClientRect();
+      pop.innerHTML = `<div class="muted small">${esc(x.u.name)} is in</div>` + x.regs.map(j => `<button class="chip" data-ri="${j}"><i style="background:${PK_COLORS[col[j]]}"></i>${esc(regs[j].name)}</button>`).join('');
+      pop.hidden = false;
+      const px = Math.min(Math.max(8, e.clientX - rect.left - pop.offsetWidth / 2), rect.width - pop.offsetWidth - 8), py = e.clientY - rect.top + 12;
+      pop.style.left = px + 'px'; pop.style.top = (py + pop.offsetHeight > rect.height ? Math.max(8, e.clientY - rect.top - pop.offsetHeight - 12) : py) + 'px';
+      pop.querySelectorAll('[data-ri]').forEach(b => { b.onmouseenter = () => { P.hover = +b.dataset.ri; paint(); }; });
+      return;
+    }
+    const r = x.regs[0];
+    if (P.ptype === 'mouse' || P.pick === r) return pickerChoose(r);
+    P.pick = r; P.hoverUnit = x; paint();
+  });
+  // Region list (the same choices, for keyboards and for regions too small to tap)
+  chips.innerHTML = `<button class="chip${cur < 0 && P.level === CUR.id && REGION === 'All' ? ' on' : ''}" data-ri="-1">All of ${esc(lvName(L.id))}</button>`
+    + (whole ? '' : regs.map((r, i) => `<button class="chip${i === cur ? ' on' : ''}" data-ri="${i}"><i style="background:${PK_COLORS[col[i]]}"></i>${esc(r.name)}</button>`).join(''));
+  chips.querySelectorAll('[data-ri]').forEach(b => {
+    const i = +b.dataset.ri; if (i < 0) return;
+    b.onmouseenter = () => { P.hover = i; paint(); };
+    b.onmouseleave = () => { P.hover = null; paint(); };
+    b.onfocus = () => { P.hover = i; paint(); }; b.onblur = () => { P.hover = null; paint(); };
+  });
+  paint();
+}
+picker.addEventListener('click', e => {
+  if (!PK) return;
+  if (e.target === picker) return closePicker(); // backdrop
+  const t = e.target.closest('button'); if (!t) return;
+  if (t.classList.contains('pk-close')) return closePicker();
+  if (t.dataset.lv) { if (t.dataset.lv !== PK.level) { PK.level = t.dataset.lv; PK.layer = 'continents'; drawPicker(); picker.querySelector('[data-lv].on').focus(); } return; }
+  if (t.dataset.layer) { if (t.dataset.layer !== PK.layer) { PK.layer = t.dataset.layer; drawPicker(); const on = picker.querySelector('[data-layer].on'); if (on) on.focus(); } return; }
+  if (t.dataset.ri != null) return pickerChoose(+t.dataset.ri);
+});
+document.addEventListener('keydown', e => {
+  if (!PK) return;
+  if (e.key === 'Escape') { e.preventDefault(); return closePicker(); }
+  if (e.key !== 'Tab') return; // keep focus inside the dialog
+  const f = [...picker.querySelectorAll('button:not([hidden])')].filter(b => b.offsetParent);
+  if (!f.length) return;
+  if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+  else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+});
+addEventListener('resize', () => { if (PK) { clearTimeout(PK.rt); PK.rt = setTimeout(drawPicker, 150); } });
+
 // ---------- Modes ----------
 const panel = document.getElementById('panel');
 const MODES = [['train', 'Train'], ['study', 'Study'], ['explore', 'Explore'], ['tap', 'Tap'], ['globle', 'Hot & Cold'], ['neighbors', 'Borders'], ['closer', 'Closer'], ['nameit', 'Name It'], ['flags', 'Flags'], ['clues', 'Clues']];
@@ -929,6 +1144,7 @@ let mode = null, S = {}, tourTimer = null;
 const nav = document.getElementById('nav');
 MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => { const again = id === mode && !TRAIN.active; stashView(); if (id !== 'train') trainStop(true); setMode(id, again); }; nav.appendChild(b); });
 function setMode(id, fresh = false) {
+  updateScopeBtn();
   if (!fresh) stashView();
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   mode = id; S = {};
@@ -942,6 +1158,7 @@ function setMode(id, fresh = false) {
   (fn || studyStart)();
 }
 document.addEventListener('keydown', e => {
+  if (PK) return; // the region picker handles its own keys
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const tag = (document.activeElement && document.activeElement.tagName) || '';
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return;
@@ -975,8 +1192,8 @@ function scopeCount() {
   if (CUR.id === 'usa' && pool().some(u => u.name === 'District of Columbia')) return `${n - 1} states + DC`;
   return `${n} ${CUR.def.units}`;
 }
-function scopeLine() { return `<div class="scopeline">Scope: <b>${esc(scopeLabel())}</b> · ${esc(scopeCount())}</div>`; }
-function noScope() { panel.innerHTML = `<h2>Nothing in scope</h2><p class="sub">This region has no playable ${esc(CUR.def.units)}. Pick another region above.</p>`; return true; }
+function scopeLine() { return `<div class="scopeline">Scope: <b>${esc(scopeLabel())}</b> · ${esc(scopeCount())} · <button class="linkbtn" data-pick>change</button></div>`; }
+function noScope() { panel.innerHTML = `<h2>Nothing in scope</h2><p class="sub">This region has no playable ${esc(CUR.def.units)}. <button class="linkbtn" data-pick>Pick another region</button>.</p>`; return true; }
 
 // ----- Train: adaptive programme -----
 const TRAIN = { active: false, program: null, topic: null, lastTopic: null, lastMode: null, remaining: 0, setSeen: 0, setMiss: 0, phase: 'run', sets: 0 };

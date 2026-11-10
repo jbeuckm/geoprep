@@ -105,6 +105,33 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
 .small{font-size:13px}
 #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:15px;background:color-mix(in srgb,var(--bg) 60%,transparent);pointer-events:none}
 #scope{display:flex;gap:6px}
+.scopebtn{display:inline-flex;align-items:center;gap:6px;background:var(--chip-on);border:1px solid var(--accent);color:var(--text);border-radius:8px;padding:5px 10px;font:inherit;font-size:13px;cursor:pointer;max-width:320px;white-space:nowrap}
+.scopebtn .sb-t{overflow:hidden;text-overflow:ellipsis;min-width:0}
+.scopebtn:hover{background:color-mix(in srgb,var(--accent) 22%,var(--chip-on))}
+.scopebtn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#picker{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.45);display:flex;align-items:flex-start;justify-content:center;padding:max(16px,env(safe-area-inset-top)) 16px 16px;overflow:auto}
+#picker[hidden]{display:none}
+body.picking{overflow:hidden}
+.pk-box{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:14px;width:100%;max-width:920px;padding:14px 16px 16px;box-shadow:0 10px 40px rgba(0,0,0,.3);min-width:0}
+.pk-head{display:flex;align-items:center;gap:8px}.pk-head h2{margin:0;font-size:18px;flex:1}
+.pk-levels,.pk-layers,.pk-chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:10px 0}
+.pk-layers:empty{display:none}
+.pk-layers .chip,.pk-chips .chip{font-size:13px;padding:5px 10px}
+.pk-chips .chip i,.pk-pop .chip i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+.pk-chips .chip.hl{border-color:var(--text)}
+.pk-map{position:relative;border:1px solid var(--line);border-radius:10px;background:var(--bg);overflow:hidden;min-height:120px}
+.pk-map svg{display:block;width:100%;height:auto;touch-action:manipulation;user-select:none;-webkit-user-select:none}
+.pk-map .u{cursor:pointer;stroke:var(--panel);stroke-width:.6;transition:fill-opacity .12s}
+.pk-map .dot{stroke:rgba(0,0,0,0);stroke-width:12px}
+.pk-map path.hl{stroke:var(--text);stroke-width:.9}
+.pk-map .ring{fill:none;stroke:var(--text);stroke-width:1.5;stroke-dasharray:4 3;pointer-events:none}
+.pk-map .lbl{font-weight:600;fill:var(--text);paint-order:stroke;stroke:var(--bg);stroke-width:3px;stroke-linejoin:round;pointer-events:none}
+.pk-wait{padding:40px;text-align:center;color:var(--muted)}
+.pk-info{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;min-height:46px;padding:8px 2px 0;font-size:14px}
+.pk-info .btn{padding:8px 14px}
+.pk-pop{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:8px;display:flex;flex-direction:column;align-items:flex-start;gap:6px;box-shadow:0 4px 16px rgba(0,0,0,.2);z-index:2}
+.pk-pop[hidden]{display:none}
+
 .flag{width:22px;height:16.5px;object-fit:cover;border-radius:2px;box-shadow:0 0 0 1px rgba(0,0,0,.15);vertical-align:-3px;margin-right:7px;flex:none}
 .flag.big{width:36px;height:27px;vertical-align:-5px;margin-right:10px}
 .flagstage{display:flex;justify-content:center;margin:10px 0 14px}
@@ -145,7 +172,7 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
       -webkit-mask-image:linear-gradient(to right,#000 85%,transparent);mask-image:linear-gradient(to right,#000 85%,transparent);padding-right:28px}
   nav::-webkit-scrollbar{display:none}
   nav button{min-height:36px;font-size:14px;padding:6px 10px}
-  #scope{grid-area:scope;min-width:0} #scope select{flex:1 1 0;width:0;min-width:0;max-width:none;min-height:36px}
+  #scope{grid-area:scope;min-width:0} .scopebtn{flex:1;max-width:none;min-height:36px;justify-content:center;font-size:14px} #scope select{flex:1 1 0;width:0;min-width:0;max-width:none;min-height:36px}
   .spacer{display:none}
 }
 </style>
@@ -155,12 +182,22 @@ label.cb{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var
   <h1>GeoDrill</h1>
   <nav id="nav"></nav>
   <span class="spacer"></span>
-  <div id="scope"><select id="level" title="Level"></select><select id="region" title="Region"></select></div>
+  <div id="scope"><button id="scopebtn" class="scopebtn" aria-haspopup="dialog" title="Choose a region"></button><select id="level" title="Level" hidden></select><select id="region" title="Region" hidden></select></div>
   <button class="iconbtn" id="installbtn" title="Install GeoDrill as an app">Install</button>
   <button class="iconbtn" id="sharebtn" title="Copy a link to this view or game">Share</button>
   <button class="iconbtn" id="statsbtn">Stats</button>
   <button class="iconbtn" id="themebtn" title="Toggle theme">◐</button>
 </header>
+<div id="picker" role="dialog" aria-modal="true" aria-labelledby="pk-title" hidden>
+  <div class="pk-box">
+    <div class="pk-head"><h2 id="pk-title">Choose a region</h2><button class="iconbtn pk-close" aria-label="Close">✕</button></div>
+    <div class="pk-levels" aria-label="Map"></div>
+    <div class="pk-layers"></div>
+    <div class="pk-map"></div>
+    <div class="pk-info" aria-live="polite"></div>
+    <div class="pk-chips" aria-label="Regions"></div>
+  </div>
+</div>
 <main>
   <section id="globe-wrap">
     <canvas id="globe"></canvas>

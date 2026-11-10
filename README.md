@@ -28,7 +28,7 @@ Everything below is the manual mode, for people who want to steer.
 
 ## Levels and scope
 
-Two dropdowns in the header set what every mode uses:
+The region button in the header (it reads, say, **World · Western Europe ▾**) sets what every mode uses. It opens a map of the level coloured by region: hover or tap a region to see what it covers, click (or tap twice) to choose it. Tabs along the top switch level; on the world map, *Group by* switches between continents and the 20 study regions, and a country that sits in two study regions (Turkey, say) asks which one. The same choices are listed under the map for keyboards and for regions too small to tap. Every drill's *Scope* line has a **change** link that opens the same map.
 
 | Level | Units | Regions | Extra prompts |
 |---|---|---|---|
