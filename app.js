@@ -3,7 +3,7 @@
    Scope: any level can be narrowed to a region; every drill and the study guide respect it. */
 (() => {
 'use strict';
-const APP_VERSION = 'v29'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v30'; // keep in step with VERSION in sw.js
 const REDUCED = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---------- Names (world level) ----------
@@ -2120,7 +2120,10 @@ function quizSafe(t) {
 function clueRows(u, keys, quiz = false) {
   const c = window.CLUES[u.name]; if (!c) return '';
   const sample = (window.SIGN_SAMPLES || {})[u.name];
-  const val = k => k === 'lang' ? (quiz ? sample : c.lang + (sample ? ` · signs read: ${sample}` : '')) : quiz ? quizSafe(c[k]) : c[k];
+  const qz = (window.CLUES_QUIZ || {})[u.name] || {};
+  // Plate country codes in brackets, e.g. "(MNE)" or "(NMK/MK)", would name the answer: hide them in the quiz.
+  const plateSafe = t => t.replace(/\((?:[A-Z]{1,3}\/)?[A-Z]{1,3}\)/g, '(country code)');
+  const val = k => k === 'lang' ? (quiz ? sample : c.lang + (sample ? ` · signs read: ${sample}` : '')) : quiz ? quizSafe(qz[k] || (k === 'plates' ? plateSafe(c[k]) : c[k])) : c[k];
   const label = k => k === 'lang' && quiz ? 'Signs read' : CLUE_LABELS[k] || k;
   return `<div class="clues">${(keys || Object.keys(c)).filter(k => c[k] && val(k)).map(k => `<div class="clue"><span class="ck">${label(k)}</span><span${k === 'lang' && quiz ? ' class="sample"' : ''}>${esc(val(k))}</span></div>`).join('')}</div>`;
 }
@@ -2158,9 +2161,9 @@ function cluesRender() {
     <div class="row" style="margin:6px 0 10px">${S.hidden.length ? '<button class="btn sec" id="morec">Reveal another clue</button>' : ''}</div>
     <div class="opts" id="clopts">${S.opts.map((c, i) => `<button class="btn" data-i="${i}">${esc(c.name)}</button>`).join('')}</div>
     <div id="clfb" aria-live="polite"></div>
-    ${coach(['Order of checks on a real round: driving side, then road-line colours, then script and language, then plates, poles and bollards.',
+    <template id="clcoach">${coach(['Order of checks on a real round: driving side, then road-line colours, then script and language, then plates, poles and bollards.',
       'Camera-car quirks are the fastest tells: Kenya snorkel, Ghana tape, Nigeria follow car, Senegal and Mongolia visible car.',
-      'Yellow centre lines point to the Americas and a few others (Norway, older Finnish imagery, Japan where overtaking is banned); all-white lines suggest most of Europe.'])}`;
+      'Yellow centre lines point to the Americas and a few others (Norway, older Finnish imagery, Japan where overtaking is banned); all-white lines suggest most of Europe.'])}</template>`;
   const m = document.getElementById('morec'); if (m) m.onclick = () => { S.shown.push(S.hidden.shift()); cluesRender(); };
   panel.querySelectorAll('#clopts .btn').forEach(b => b.onclick = () => cluesAnswer(+b.dataset.i));
 }
@@ -2180,7 +2183,7 @@ function cluesAnswer(i) {
   document.getElementById('clfb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${flagImg(S.t, 'flag big')}${correct ? 'Correct' : 'It was ' + esc(S.t.name)}</div>
     <div class="small muted">${esc(S.t.region || '')}${S.t.capital ? ' · Capital: ' + esc(S.t.capital) : ''}</div>
     ${clueRows(S.t)}
-    <div style="margin-top:8px"><button class="btn" id="clnext">Next</button></div></div>`;
+    <div style="margin-top:8px"><button class="btn" id="clnext">Next</button></div></div>${(document.getElementById('clcoach') || {}).innerHTML || ''}`;
   document.getElementById('clnext').onclick = () => advance(() => { resetGlobe(); cluesStart(); });
   render();
 }
