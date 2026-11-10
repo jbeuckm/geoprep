@@ -3,7 +3,8 @@
    Scope: any level can be narrowed to a region; every drill and the study guide respect it. */
 (() => {
 'use strict';
-const APP_VERSION = 'v25'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v26'; // keep in step with VERSION in sw.js
+const REDUCED = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---------- Names (world level) ----------
 const RENAME = {
@@ -91,7 +92,7 @@ function save() { try { localStorage.setItem(STORE, JSON.stringify(STATS)); } ca
 function mark(unit, missed) {
   const c = STATS.units[unit.key] || (STATS.units[unit.key] = { seen: 0, miss: 0, name: unit.name, level: unit.level });
   c.seen++; if (missed) c.miss++; save();
-  if (TRAIN.active) { TRAIN.setSeen++; if (missed) TRAIN.setMiss++; }
+  if (TRAIN.active) { TRAIN.setSeen++; if (missed) { TRAIN.setMiss++; (TRAIN.missed ||= []).includes(unit.name) || TRAIN.missed.push(unit.name); } }
 }
 // Weighted random: unseen and often-missed units come up more.
 function weightOf(unit) {
@@ -332,7 +333,7 @@ function frameZoom(units, fill = 0.8, trim = false) {
     }
   }
   let r = 0;
-  for (const u of set) { const vs = trim ? u.pieces.slice(0, 3) : u.vertices; for (const v of vs) r = Math.max(r, d3.geoDistance(c, v)); }
+  for (const u of set) { const vs = trim ? u.pieces.slice(0, 3).filter((pc, i) => i === 0 || d3.geoDistance(pc, u.pieces[0]) < 0.12) : u.vertices; for (const v of vs) r = Math.max(r, d3.geoDistance(c, v)); }
   if (trim) r *= 1.25; // pieces are centres, so pad for the land around them
   return { center: c, zoom: Math.max(1, Math.min(48, fill / Math.max(r, 0.01))) };
 }
@@ -386,8 +387,10 @@ function zoomForUnit(u) {
     if (big) z = Math.min(z, 0.75 / Math.max(big.dist, 0.05));
     z = Math.min(z, 5);
   }
-  return Math.max(1, z);
+  return Math.max(1, z) * pxBoost();
 }
+// A small globe (phones) shows the same area in fewer pixels: zoom in a little more so shapes stay readable.
+function pxBoost() { return Math.min(1.6, Math.max(1, 300 / Math.max(G.base, 1))); }
 // Nearest unit with meaningful land area (> ~4,000 km²) and the angular distance to its closest vertex.
 function nearestLargeLand(u) {
   let best = null;
@@ -463,11 +466,13 @@ function render() {
   const pxScale = (G.base * G.zoom) ** 2, center0 = [-G.rotate[0], -G.rotate[1]];
   for (const c of CUR.units) {
     const f = G.fill(c); if (!f || c.area * pxScale > 600) continue;
-    let n = 0;
+    let n = 0; const rings = []; // one ring per cluster of islands, not one per island
     for (const pt of c.pieces) {
-      if (n++ > 40) break;
+      if (n++ > 60) break;
       if (d3.geoDistance(pt, center0) > Math.PI / 2 - 0.02) continue;
       const [x, y] = G.projection(pt);
+      if (rings.some(q => (q[0] - x) ** 2 + (q[1] - y) ** 2 < 22 * 22)) continue;
+      rings.push([x, y]);
       ctx.beginPath(); ctx.arc(x, y, 11, 0, 2 * Math.PI); ctx.strokeStyle = f; ctx.lineWidth = 2.5; ctx.stroke();
       ctx.beginPath(); ctx.arc(x, y, 3, 0, 2 * Math.PI); ctx.fillStyle = f; ctx.fill();
     }
@@ -493,7 +498,7 @@ function render() {
       if (!hits(r)) { placed.push(r); ctx.fillStyle = cssVar('--panel-faint'); ctx.fillRect(r.x, r.y, w, h); ctx.fillStyle = cssVar('--muted'); ctx.fillText(m.label, lx, ly); }
       ctx.textAlign = 'start'; continue;
     }
-    if (m.pulse) { // a ring that expands and fades for 0.8s, so a just-placed marker is easy to spot
+    if (m.pulse && !REDUCED()) { // a ring that expands and fades for 0.8s, so a just-placed marker is easy to spot
       const t = (performance.now() - m.pulse) / 800;
       if (t < 1) { ctx.beginPath(); ctx.arc(x, y, (m.r || 6) + 4 + t * 16, 0, 2 * Math.PI); ctx.globalAlpha = 1 - t; ctx.strokeStyle = m.color; ctx.lineWidth = 2.5; ctx.stroke(); ctx.globalAlpha = 1; }
     }
@@ -510,7 +515,7 @@ function render() {
       ctx.fillStyle = cssVar('--text'); ctx.fillText(m.label, r.x + 4, r.y + h / 2);
     }
   }
-  if (LABELS.level > 0 && labelsAllowed() && !G.coarse) drawLearningLabels(center, placed, hits);
+  if (labelLevel() > 0 && labelsAllowed() && !G.coarse) drawLearningLabels(center, placed, hits);
   ctx.beginPath(); G.path({ type: 'Sphere' }); ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke();
 }
 // ---------- Zooming about a fixed screen point ----------
@@ -554,6 +559,7 @@ function anchoredView(p, sp, target, dir) {
 }
 // Animate the zoom while the tapped point stays pinned under the finger.
 function zoomAbout(p, sp, z1, ms = 750) {
+  if (REDUCED()) ms = 1;
   if (G.anim) G.anim.stop();
   const z0 = G.zoom, ease = d3.easeCubicInOut;
   G.anim = d3.timer(el => {
@@ -567,6 +573,7 @@ let pulseTimer = null, revealTimer = null;
 function pulseMarkers() { if (pulseTimer) pulseTimer.stop(); pulseTimer = d3.timer(el => { render(); if (el > 850) { pulseTimer.stop(); pulseTimer = null; } }); }
 function flyTo(lonlat, zoom, ms = 900) {
   if (G.anim) G.anim.stop();
+  if (REDUCED()) ms = 1;
   const from = G.rotate.slice(), fz = G.zoom, tz = zoom == null ? G.zoom : zoom;
   const to = [-lonlat[0], -lonlat[1]];
   let dl = to[0] - from[0]; while (dl > 180) dl -= 360; while (dl < -180) dl += 360;
@@ -693,7 +700,7 @@ function restoreView(key) {
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   if (G.anim) { G.anim.stop(); G.anim = null; }
   if (CUR !== LEVELS[s.level] || REGION !== s.region) { CUR = LEVELS[s.level]; REGION = s.region; levelSel.value = CUR.id; fillRegionSelect(); distCache.clear(); }
-  mode = s.mode; S = s.S; stashedS = null;
+  mode = s.mode; S = s.S; stashedS = null; layoutFor(mode);
   if (s.train) Object.assign(TRAIN, s.train);
   Object.assign(G, { fill: s.G.fill, stroke: s.G.stroke, markers: s.G.markers, lines: s.G.lines, onTap: s.G.onTap, hover: s.G.hover, rotate: s.G.rotate, zoom: s.G.zoom, hoverName: null });
   canvas.classList.toggle('tap', s.G.tap); tip.style.display = 'none';
@@ -702,6 +709,16 @@ function restoreView(key) {
   updateLabelButton(); trainBar(); syncHash(); render();
   return true;
 }
+const RESUME_KEY = 'geodrill.resume';
+function resumeAll() { try { return JSON.parse(localStorage.getItem(RESUME_KEY)) || {}; } catch (e) { return {}; } }
+// One saved game per address, so a reload (or iOS closing the app) picks up where you were. Training sets are not saved.
+function resumeSave(data) {
+  if (TRAIN.active || !CUR) return;
+  try { const all = resumeAll(), k = routePath(); if (data) { delete all[k]; all[k] = data; } else delete all[k];
+    const keys = Object.keys(all); while (keys.length > 6) delete all[keys.shift()];
+    localStorage.setItem(RESUME_KEY, JSON.stringify(all)); } catch (e) {}
+}
+function resumeTake(kind) { if (TRAIN.active || FRESH) return null; const d = resumeAll()[routePath()]; return d && d.kind === kind ? d : null; }
 function toast(text) {
   const t = document.createElement('div'); t.className = 'toast'; t.textContent = text;
   document.body.appendChild(t); setTimeout(() => t.remove(), 2600);
@@ -735,6 +752,8 @@ document.getElementById('sharebtn').onclick = () => shareLink();
 const LABELS = { level: 0 }; // 0 off, 1 names, 2 names + cities and capitals
 try { LABELS.level = +(localStorage.getItem('geodrill.labels') || 0) || 0; } catch (e) {}
 const LABEL_MODES = new Set(['study', 'explore']); // learning views only, so drills are never given away
+// The review step after a weak set always shows names, without changing the saved setting.
+function labelLevel() { return TRAIN.active && TRAIN.phase === 'review' && mode === 'study' ? Math.max(1, LABELS.level) : LABELS.level; }
 function labelsAllowed() { return LABEL_MODES.has(mode); }
 function byAreaDesc(units) { return units.__sorted || (units.__sorted = units.slice().sort((a, b) => b.area - a.area)); }
 function drawLearningLabels(center, placed, hits) {
@@ -744,7 +763,7 @@ function drawLearningLabels(center, placed, hits) {
   const strong = cssVar('--text'), muted = cssVar('--muted'), bg = cssVar('--panel-faint');
   const over = (a, q) => a.x < q.x + q.w && q.x < a.x + a.w && a.y < q.y + q.h && q.y < a.y + a.h;
   // With capitals showing, unit names keep clear of every capital's dot so capitals are never hidden.
-  const capDots = LABELS.level >= 2 ? CUR.places.filter(pl => pl.kind === 'capital' && vis(pl.p)).map(pl => { const [cx, cy] = G.projection(pl.p); return { x: cx - 5, y: cy - 5, w: 10, h: 10 }; }) : [];
+  const capDots = labelLevel() >= 2 ? CUR.places.filter(pl => pl.kind === 'capital' && vis(pl.p)).map(pl => { const [cx, cy] = G.projection(pl.p); return { x: cx - 5, y: cy - 5, w: 10, h: 10 }; }) : [];
   // A unit name goes on its main landmass; if that spot is taken it may shift up or down, as long as it stays inside the unit.
   const putUnit = (u, font, color) => {
     const [x, y] = G.projection(u.anchor);
@@ -760,9 +779,10 @@ function drawLearningLabels(center, placed, hits) {
     return false;
   };
   // A place gets a dot and a label to its right, left, above or below, whichever is free.
+  const marked = new Set(G.markers.filter(m => m.label && !m.textOnly).map(m => m.label));
   const drawPlaces = kinds => {
     for (const pl of CUR.places) {
-      if (!kinds.includes(pl.kind) || !vis(pl.p)) continue;
+      if (!kinds.includes(pl.kind) || !vis(pl.p) || marked.has(pl.name)) continue;
       const [x, y] = G.projection(pl.p);
       if (x < 0 || y < 0 || x > G.w || y > G.h) continue;
       const dot = { x: x - 4, y: y - 4, w: 8, h: 8 };
@@ -784,7 +804,7 @@ function drawLearningLabels(center, placed, hits) {
     if (drawn.has(u.name) || !vis(u.anchor)) continue;
     putUnit(u, '600 11.5px system-ui, sans-serif', strong);
   }
-  if (LABELS.level >= 2) { drawPlaces(['capital']); drawPlaces(['city', 'landmark']); }
+  if (labelLevel() >= 2) { drawPlaces(['capital']); drawPlaces(['city', 'landmark']); }
   // On a sub-national level, also name the surrounding countries in a quieter style.
   if (!CUR.isWorld) for (const u of byAreaDesc(WORLD.units)) {
     if (u.name === CUR.def.parent || drawn.has(u.name) || !vis(u.anchor)) continue;
@@ -880,10 +900,14 @@ function resetGlobe() {
 }
 
 // ---------- Globle colour scale ----------
-const globleColorWorld = d3.scaleLinear().domain([0, 400, 1200, 3000, 6000, 10000, 15000])
-  .range(['#8b0000', '#d7301f', '#fc8d59', '#fdcc8a', '#fef0c6', '#f7f4e9', '#eceae4']).clamp(true);
-const globleColorSub = d3.scaleLinear().domain([0, 100, 300, 800, 1500, 2500, 4000])
-  .range(['#8b0000', '#d7301f', '#fc8d59', '#fdcc8a', '#fef0c6', '#f7f4e9', '#eceae4']).clamp(true);
+// Hot = red, cold = blue, so far guesses never look like land nobody has guessed. Dark mode gets a brighter hot end.
+const HC_LIGHT = ['#a50f15', '#e34a33', '#fc8d59', '#fdcc8a', '#d4e4ef', '#9ecae1', '#6baed6'];
+const HC_DARK = ['#ff4d3a', '#f46d43', '#fdae61', '#fee08b', '#a6cde6', '#6aa5d8', '#4f86c6'];
+const isDarkTheme = () => { const t = document.documentElement.dataset.theme; return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; };
+const hcScales = {};
+function hcScale(world) { const k = (world ? 'w' : 's') + (isDarkTheme() ? 'd' : 'l');
+  return hcScales[k] ||= d3.scaleLinear().domain(world ? [0, 400, 1200, 3000, 6000, 10000, 15000] : [0, 100, 300, 800, 1500, 2500, 4000]).range(isDarkTheme() ? HC_DARK : HC_LIGHT).clamp(true); }
+const globleColorWorld = d => hcScale(true)(d), globleColorSub = d => hcScale(false)(d);
 const globleColor = d => (CUR.isWorld ? globleColorWorld : globleColorSub)(d);
 
 // ---------- Scope controls ----------
@@ -921,7 +945,7 @@ async function setLevel(id, region = 'All', modeId = null) {
 // Picking a level or region by hand from the Train screen means "let me study this": open the study guide.
 levelSel.onchange = () => { stashView(); trainStop(true); setLevel(levelSel.value, 'All', mode === 'train' ? 'study' : null); };
 regionSel.onchange = () => { stashView(); trainStop(true); REGION = regionSel.value; if (mode === 'stats') return openStats(); flyHome(); setMode(mode === 'train' ? 'study' : mode); };
-function scopeLabel() { return (REGION === 'All' ? CUR.def.label.split(' · ')[0] : REGION); }
+function scopeLabel() { const lv = CUR.def.label.split(' · ')[0]; return REGION === 'All' ? lv : CUR.isWorld ? REGION : `${lv} · ${REGION}`; }
 
 // ---------- Region picker: a map of the level, coloured by region; tap a region to practise it ----------
 const picker = document.getElementById('picker'), scopeBtn = document.getElementById('scopebtn');
@@ -1143,12 +1167,14 @@ const MODES = [['train', 'Train'], ['study', 'Study'], ['explore', 'Explore'], [
 let mode = null, S = {}, tourTimer = null;
 const nav = document.getElementById('nav');
 MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => { const again = id === mode && !TRAIN.active; stashView(); if (id !== 'train') trainStop(true); setMode(id, again); }; nav.appendChild(b); });
+function layoutFor(id) { if (document.body.dataset.mode !== id) { document.body.dataset.mode = id; resize(); } }
+let FRESH = false; // the current mode was started afresh (its own tab pressed again): don't resume a saved game
 function setMode(id, fresh = false) {
-  updateScopeBtn();
+  updateScopeBtn(); layoutFor(id); FRESH = fresh;
   if (!fresh) stashView();
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   mode = id; S = {};
-  if (fresh) SNAP.delete(routePath());
+  if (fresh) { SNAP.delete(routePath()); resumeSave(null); }
   else if (!TRAIN.active && SNAP.has(routePath()) && restoreView(routePath())) return 'restored';
   updateLabelButton();
   syncHash();
@@ -1186,6 +1212,7 @@ function revealFeedback(sel) {
   const top = el.firstElementChild.getBoundingClientRect().top - side.getBoundingClientRect().top + side.scrollTop - 8;
   side.scrollTo({ top, behavior: 'smooth' }); // scroll the panel only, never the document
 }
+function streakHint(k) { const h = panel.querySelector('.hint'); if (h && /streak/i.test(h.textContent)) h.textContent = 'Running streak ' + (STATS.streaks[k] || 0); }
 function coach(items) { return `<div class="coach"><b>Coach</b><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`; }
 function scopeCount() {
   const n = pool().length;
@@ -1258,7 +1285,7 @@ function trainLanding() {
     <p class="sub">Pick what you're practising for. The app chooses the topics and drills, doubles down where you miss, and moves on when you're solid. No settings needed.</p>
     <div class="bigopts">${Object.entries(PROGRAMS).map(([id, p]) => `<button data-p="${id}"><b>${p.label}${saved === id ? ' <span class="muted small">· continue</span>' : ''}</b><small>${p.blurb}</small></button>`).join('')}</div>
     ${weak.length ? `<div class="small"><b>Where you've struggled:</b> ${weak.map(x => `${esc(x.t.label)} (${Math.round(100 * x.miss / x.seen)}% missed)`).join(', ')}</div>` : '<div class="small muted">No history yet. The first sets sample widely to find your weak spots.</div>'}
-    <div class="small muted" style="margin-top:14px">Prefer to steer yourself? Use Study and the level/region dropdowns. Sets are 5 questions, or one Tap round or Hot &amp; Cold game.</div>`;
+    <div class="small muted" style="margin-top:14px">Prefer to steer yourself? Pick a drill from the tabs and a region with the map button. Training chooses its own regions. Sets are 5 questions, or one Tap round or Hot &amp; Cold game.</div>`;
   panel.querySelectorAll('.bigopts button').forEach(b => b.onclick = () => trainChoose(b.dataset.p));
 }
 function trainChoose(program) {
@@ -1269,12 +1296,12 @@ function trainChoose(program) {
 }
 function trainStop(silent) {
   if (!TRAIN.active) return;
-  if (silent) stashView(true);
+  if (silent) { stashView(true); toast(`Training paused. Pick ${PROGRAMS[TRAIN.program].label} again on Train to carry on.`); }
   TRAIN.active = false; TRAIN.phase = 'run'; trainBar();
   if (!silent) setMode('train');
 }
 async function trainRunSet(topic, forceMode = null) {
-  TRAIN.topic = topic; TRAIN.phase = 'run'; TRAIN.sets++;
+  TRAIN.topic = topic; TRAIN.phase = 'run'; TRAIN.sets++; TRAIN.missed = [];
   const m = forceMode || pickMode(TRAIN.program, topic.level);
   TRAIN.lastMode = m; TRAIN.setSize = TRAIN.remaining = (m === 'tap' || m === 'globle') ? 1 : 5; TRAIN.setSeen = 0; TRAIN.setMiss = 0;
   await setLevel(topic.level, topic.region, m);
@@ -1320,11 +1347,13 @@ function studyStart() {
   const grouped = {};
   for (const u of units) (grouped[u.region || 'All'] ||= []).push(u);
   const groups = Object.keys(grouped).sort();
-  const row = u => `<div class="urow" data-n="${esc(u.name)}"><span class="un">${flagImg(u)}${esc(u.name)}</span><span class="uc muted">${u.capital ? esc(u.capital) : ''}</span><span class="ub muted">${u.neighbors.size ? u.neighbors.size + (u.neighbors.size === 1 ? ' neighbour' : ' neighbours') : 'no land borders'}${u.places && u.places.length ? ' · ' + u.places.length + (u.places.length === 1 ? ' place' : ' places') : ''}</span></div>`;
+  const review = TRAIN.active && TRAIN.phase === 'review', missed = new Set(review ? TRAIN.missed || [] : []);
+  const row = u => `<div class="urow${missed.has(u.name) ? ' missed' : ''}" role="button" tabindex="0" data-n="${esc(u.name)}"><span class="un">${flagImg(u)}${esc(u.name)}${missed.has(u.name) ? ' <span class="misstag">missed</span>' : ''}</span><span class="uc muted">${u.capital ? esc(u.capital) : ''}</span><span class="ub muted">${u.neighbors.size ? u.neighbors.size + (u.neighbors.size === 1 ? ' neighbour' : ' neighbours') : 'no land borders'}${u.places && u.places.length ? ' · ' + u.places.length + (u.places.length === 1 ? ' place' : ' places') : ''}</span></div>`;
   panel.innerHTML = `<h2>Study guide</h2>
     ${scopeLine()}
     <p class="sub">Click a ${esc(CUR.def.unit)} to fly to it and see its neighbours. Press <b>Aa</b> on the globe to label the map (press again to add capitals and cities). Then drill the same scope with the buttons below.</p>
-    <div class="row" style="margin:6px 0 10px">
+    ${review ? `<div class="card warn"><b>Review:</b> ${missed.size ? `you missed ${[...missed].map(n => `<button class="linkbtn" data-review="${esc(n)}">${esc(n)}</button>`).join(', ')}. Look at each, then press <b>Quiz me again</b> above.` : 'look over the map, then press <b>Quiz me again</b> above.'}</div>` : ''}
+    <div class="row" style="margin:6px 0 10px"${review ? ' hidden' : ''}>
       <button class="btn" data-m="tap">Tap</button><button class="btn" data-m="nameit">Name It</button><button class="btn" data-m="neighbors">Borders</button><button class="btn" data-m="globle">Hot &amp; Cold</button>${CUR.isWorld ? '<button class="btn" data-m="flags">Flags</button><button class="btn" data-m="clues">Clues</button>' : ''}
       <button class="btn sec" id="tour">▶ Tour</button>
     </div>
@@ -1338,8 +1367,15 @@ function studyStart() {
       `Learn the ${esc(CUR.def.units)} as a grid: which row and column each sits in, then its capital.`,
       'The Tour cycles through every unit in scope with its capital. Run it twice, then switch to Name It.'])}`;
   panel.querySelectorAll('[data-m]').forEach(b => b.onclick = () => setMode(b.dataset.m));
-  panel.querySelectorAll('.urow').forEach(r => r.onclick = () => showUnit(CUR.byName.get(r.dataset.n)));
-  G.onTap = p => { const c = unitAt(p); if (c && c.level === CUR.id) showUnit(c); };
+  panel.querySelectorAll('.urow').forEach(r => { r.onclick = () => showUnit(CUR.byName.get(r.dataset.n), true);
+    r.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); r.click(); } }; });
+  panel.querySelectorAll('[data-review]').forEach(b => b.onclick = () => showUnit(CUR.byName.get(b.dataset.review), true));
+  G.onTap = p => { const c = unitAt(p); if (c && c.level === CUR.id) showUnit(c, true); };
+  if (review && missed.size) { // start the review on the misses: shaded on a labelled map
+    const mu = [...missed].map(n => CUR.byName.get(n)).filter(Boolean);
+    G.fill = x => mu.includes(x) ? cssVar('--warn') : null;
+    if (mu.length) { const fr = frameZoom(mu, 0.7, true); flyTo(fr.center, Math.min(fr.zoom, zoomForScope() * 2)); }
+  }
   let tourIdx = -1;
   document.getElementById('tour').onclick = e => {
     if (tourTimer) { clearInterval(tourTimer); tourTimer = null; e.target.textContent = '▶ Tour'; return; }
@@ -1348,12 +1384,13 @@ function studyStart() {
     step(); tourTimer = setInterval(step, 3000);
   };
   S.focus = showUnit;
-  function showUnit(c) {
+  function showUnit(c, byHand) {
     S.focused = c; focusHash(c);
     const pls = CUR.places.filter(pl => pl.units.includes(c));
     G.markers = pls.map(pl => ({ p: pl.p, color: pl.kind === 'capital' ? cssVar('--bad') : pl.kind === 'landmark' ? cssVar('--warn') : cssVar('--text'), r: pl.kind === 'capital' ? 6 : 4, label: pl.name }));
     const fr = frameWithLabels([c], pls.map(pl => pl.p), 0.8, 1.6);
-    const zc = Math.max(zoomForUnit(c) * 0.9, fr.zoom), cc = pls.length > 1 ? fr.center : c.centroid;
+    // Capped so small countries keep their surroundings in view (Kosovo shows the Balkans, not just its neighbours).
+    const zc = Math.min(Math.max(zoomForUnit(c) * 0.9, fr.zoom), CUR.isWorld ? 5 * pxBoost() : 48), cc = pls.length > 1 ? fr.center : c.centroid;
     flyTo(cc, zc);
     G.markers = G.markers.concat(contextLabels(cc, zc, new Set([c])));
     G.fill = x => x === c ? cssVar('--accent') : (x.level === c.level && c.neighbors.has(x.name)) ? '#f0a53a' : null;
@@ -1365,6 +1402,8 @@ function studyStart() {
       <div style="margin-top:6px"><b>Borders (${nbs.length}):</b> ${nbs.length ? nbs.map(esc).join(', ') : 'none — island or isolated'}</div>
       ${c.places && c.places.length ? `<div style="margin-top:4px"><b>Cities & places:</b> ${c.places.map(esc).join(', ')}</div>` : ''}
       ${clueCard(c)}</div>`;
+    // On phones the card sits above a long list: bring it into view when someone picks a unit.
+    if (byHand && matchMedia('(max-width:860px)').matches) el.scrollIntoView({ block: 'nearest', behavior: REDUCED() ? 'auto' : 'smooth' });
     render();
   }
 }
@@ -1422,9 +1461,20 @@ function tapStart() {
   S.plan = ROUTE.q ? decodePlan(ROUTE.q) : null;
   if (ROUTE.q && !S.plan) toast("That shared round's link is damaged, so this is a new round.");
   S.shared = S.plan ? { score: ROUTE.s != null && /^\d+$/.test(ROUTE.s) ? Math.min(500, +ROUTE.s) : null } : null;
-  if (!S.plan) S.plan = planTapRound();
+  if (!S.plan) {
+    const saved = resumeTake('tap'), plan = saved && decodePlan(saved.plan);
+    if (plan && Array.isArray(saved.round) && saved.round.length < plan.length) {
+      S.plan = plan; S.cats = saved.cats || S.cats; S.shared = saved.shared || null;
+      S.round = saved.round.map((r, i) => ({ q: plan[i], score: r[0], d: r[1], p: r[2], target: r[3], inside: !!r[4] }));
+      if (S.round.length) toast('Picked up your round where you left off.');
+      return tapNext();
+    }
+    S.plan = planTapRound();
+  }
+  tapSave();
   tapNext();
 }
+function tapSave() { resumeSave({ kind: 'tap', plan: encodePlan(S.plan), cats: S.cats, shared: S.shared, round: S.round.map(r => [r.score, Math.round(r.d * 10) / 10, r.p, r.target, r.inside ? 1 : 0]) }); }
 const tapKey = q => q.kind === 'unit' ? q.c.key : 'place:' + CUR.id + ':' + q.pl.name;
 const tapName = q => q.kind === 'unit' ? q.c.name : q.pl.name;
 function chooseTapQuestion(taken) {
@@ -1491,13 +1541,14 @@ function tapRender() {
     S.cats[cb.dataset.cat] = cb.checked;
     S.plan.length = S.round.length + 1; // keep the current question, re-plan the rest with the new categories
     while (S.plan.length < S.n) S.plan.push(chooseTapQuestion(S.plan));
+    tapSave();
   });
   if (TRAIN.active) trainBar();
   const rc = document.getElementById('revealc'); if (rc) rc.onclick = e => { e.preventDefault(); rc.replaceWith(document.createTextNode(q.pl.where)); };
 }
-function tapRounds(level) { return STATS.tap.map(r => typeof r === 'number' ? { t: r, level: 'world' } : r).filter(r => r.level === level).map(r => r.t); }
+function tapRounds(level, region = 'All') { return STATS.tap.map(r => typeof r === 'number' ? { t: r, level: 'world' } : r).filter(r => r.level === level && (r.region || 'All') === region).map(r => r.t); }
 function tapHistory() {
-  const t = tapRounds(CUR.id);
+  const t = tapRounds(CUR.id, REGION);
   const best = t.length ? Math.max(...t) : null, avg = t.length ? Math.round(t.reduce((a, b) => a + b, 0) / t.length) : null;
   return `<div class="small muted" style="margin-top:8px">${esc(scopeLabel())} rounds played: ${t.length}${best != null ? ` · Best ${best}/${S.n * 100} · Avg ${avg}` : ''}</div>`;
 }
@@ -1508,7 +1559,7 @@ function tapAnswer(p) {
   else { target = q.pl.p; d = haversine(p, target); if (d < 25) { d = 0; inside = true; } statUnit = q.pl.units[0] || null; }
   const score = tapScore(d);
   if (statUnit) mark(statUnit, score < 60);
-  S.round.push({ q, score, d, p, target, inside });
+  S.round.push({ q, score, d, p, target, inside }); tapSave();
   { const tot = S.round.reduce((a, r) => a + r.score, 0); const ts = document.getElementById('tapscore'), tb = document.getElementById('tapbar');
     if (ts) ts.textContent = 'Round score ' + tot; if (tb) tb.style.width = (tot / S.n) + '%'; }
   const okc = cssVar('--ok'), badc = cssVar('--bad');
@@ -1560,7 +1611,7 @@ function tapAnswer(p) {
 }
 function tapSummary() {
   const total = S.round.reduce((a, r) => a + r.score, 0);
-  STATS.tap.push({ t: total, level: CUR.id }); save();
+  STATS.tap.push({ t: total, level: CUR.id, region: REGION }); save(); resumeSave(null);
   resetGlobe(); G.hover = true;
   const col = r => r.score >= 80 ? cssVar('--ok') : r.score >= 40 ? cssVar('--warn') : cssVar('--bad');
   G.markers = S.round.map(r => ({ p: r.target, color: col(r), r: 5, label: `${r.q.kind === 'unit' ? r.q.c.name : r.q.pl.name} · ${r.score}` }))
@@ -1576,7 +1627,7 @@ function tapSummary() {
     ${tapHistory()}`;
   S.total = total; S.roundDone = true;
   document.getElementById('sharer').onclick = () => shareLink();
-  document.getElementById('again').onclick = () => advance(() => { S.round = []; S.shared = null; S.roundDone = false; S.plan = planTapRound(); cleanHash(); tapNext(); });
+  document.getElementById('again').onclick = () => advance(() => { S.round = []; S.shared = null; S.roundDone = false; S.plan = planTapRound(); cleanHash(); tapSave(); tapNext(); });
 }
 
 // ----- Globle -----
@@ -1587,6 +1638,12 @@ function globleStart() {
   S.shared = sharedTarget ? { guesses: ROUTE.g && /^\d+$/.test(ROUTE.g) && +ROUTE.g >= 1 && +ROUTE.g <= CUR.playable.length ? +ROUTE.g : null } : null;
   if (ROUTE.t && !(sharedTarget && sharedTarget.playable)) toast("That shared game's link is damaged, so this is a new hidden " + CUR.def.unit + '.');
   S.guesses = []; S.done = false; S.won = false; S.hintsUsed = 0;
+  const saved = !ROUTE.t && resumeTake('globle'), st = saved && CUR.byName.get(saved.t);
+  if (st && st.playable) {
+    S.target = st; S.shared = saved.shared || null; S.hintsUsed = saved.h || 0;
+    S.guesses = (saved.g || []).map(n => CUR.byName.get(n)).filter(Boolean).map(c => ({ c, d: unitDist(c, st) }));
+    if (S.guesses.length) toast('Picked up your game where you left off.');
+  }
   const nb = S.target.neighbors.size;
   S.hints = [
     ...(REGION === 'All' && S.target.region ? [`Region: ${S.target.region}`] : []),
@@ -1595,23 +1652,26 @@ function globleStart() {
     ...(nb ? [`One of its neighbours is ${[...S.target.neighbors][Math.floor(Math.random() * nb)]}.`] : []),
   ];
   G.hover = false;
-  globleRender();
+  globleRender(); globleFrame();
 }
 function globleRender() {
-  const sorted = S.guesses.slice().sort((a, b) => a.d - b.d);
+  const rank = g => g.c === S.target ? -1 : g.d; // the found one first, then nearest
+  const sorted = S.guesses.slice().sort((a, b) => rank(a) - rank(b));
   const games = STATS.globle, avg = games.length ? (games.reduce((a, b) => a + b, 0) / games.length).toFixed(1) : '–';
   panel.innerHTML = `<h2>Hot &amp; Cold <span class="muted small">· hidden ${esc(CUR.def.unit)}</span></h2>
     ${scopeLine()}
     ${S.shared ? `<div class="sharedbar">🔗 Shared game: the same hidden ${esc(CUR.def.unit)} your friend hunted${S.shared.guesses != null ? `. They found it in <b>${S.shared.guesses}</b> guesses` : ''}.</div>` : ''}
     <p class="sub">A mystery ${esc(CUR.def.unit)} from the scope is hidden. Guess any ${esc(CUR.def.unit)}: the warmer the colour, the closer it is. Bordering ones show darkest red.</p>
-    ${S.done ? '' : `<form id="gform"><input type="text" id="gq" placeholder="Type a ${esc(CUR.def.unit)} and press Enter" list="glist" autocomplete="off"></form>
+    ${S.done ? '' : `<form id="gform"><input type="text" id="gq" aria-label="Guess a ${esc(CUR.def.unit)}" placeholder="Type a ${esc(CUR.def.unit)} and press Enter" list="glist" autocomplete="off"></form>
+    <div class="hcleg" aria-hidden="true"><span>borders</span><i style="background:linear-gradient(90deg,${(isDarkTheme() ? HC_DARK : HC_LIGHT).join(',')})"></i><span>far</span></div>
     <datalist id="glist">${CUR.playable.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>
     <div class="hint" id="gmsg" aria-live="polite"></div><div class="small" id="ghints"></div>`}
     <div class="row small muted" style="margin-top:6px"><span>Guesses: <b>${S.guesses.length}</b></span><span>·</span><span>Games: ${games.length}</span><span>·</span><span>Avg guesses: ${avg}</span></div>
     <div id="gres" aria-live="polite"></div>
     <ul class="glist">${sorted.map(g => `<li><span class="sw" style="background:${g.c === S.target ? cssVar('--ok') : globleColor(g.d)}"></span>${flagImg(g.c)}${esc(g.c.name)}<span class="d">${g.c === S.target ? 'found' : g.d === 0 ? 'borders it' : fmtKm(g.d)}</span></li>`).join('')}</ul>
     <div class="row">${S.done ? '<button class="btn" id="gnew">New game</button>' : `<button class="btn sec" id="ghint" ${S.hintsUsed >= S.hints.length ? 'disabled' : ''}>Hint (${S.hints.length - S.hintsUsed} left)</button> <button class="btn sec" id="ggive">Give up</button>`}</div>
-    ${coach(['Open with one guess per continent, spread out: e.g. Mexico, Germany, Egypt, India, Australia. Three or four openers anchor the search.',
+    ${coach([CUR.isWorld && REGION === 'All' ? 'Open with one guess per continent, spread out: e.g. Mexico, Germany, Egypt, India, Australia. Three or four openers anchor the search.'
+        : `Open with two or three guesses at opposite edges of ${esc(scopeLabel())}. They anchor the search.`,
       'Treat your warmest guess as the anchor and walk its borders. Dark red means you share a border: list that country\'s neighbours and pick one that explains all previous colours.',
       'If two guesses are equally warm, the target is roughly between them. Stop pushing in a direction once colours cool.',
       'Colours reflect distance between borders, so a huge neighbour (Russia, Brazil) can read red while its far side is thousands of km away.'])}`;
@@ -1625,7 +1685,16 @@ function globleRender() {
   }
   const n = document.getElementById('gnew'); if (n) n.onclick = () => advance(() => { resetGlobe(); cleanHash(); globleStart(); });
   G.fill = c => { if (c.level !== CUR.id) return null; const g = S.guesses.find(x => x.c === c); if (g) return c === S.target ? cssVar('--ok') : globleColor(g.d); if (S.done && c === S.target) return cssVar('--ok'); return null; };
+  const guessed = new Set(S.guesses.map(g => g.c));
+  G.stroke = c => guessed.has(c) ? cssVar('--text') : null; // outline guesses so pale colours still stand out
+  if (!S.done) resumeSave({ kind: 'globle', t: S.target.name, g: S.guesses.map(g => g.c.name), h: S.hintsUsed, shared: S.shared });
   render();
+}
+// Keep every guess in view: frame them all, never zooming in past the scope's usual close-up.
+function globleFrame() {
+  const gu = S.guesses.map(g => g.c); if (!gu.length) return;
+  const fr = frameZoom(gu, 0.85);
+  flyTo(gu.length > 1 ? fr.center : gu[0].centroid, Math.max(CUR.def.homeZoom * 0.8, Math.min(fr.zoom, CUR.def.homeZoom * 2.2)));
 }
 function globleGuess(text) {
   const msg = document.getElementById('gmsg');
@@ -1640,14 +1709,14 @@ function globleGuess(text) {
   if (S.guesses.some(g => g.c === c)) { msg.textContent = `Already guessed ${c.name}.`; return; }
   const d = unitDist(c, S.target);
   S.guesses.push({ c, d });
-  flyTo(c.centroid, Math.max(CUR.def.homeZoom, Math.min(G.zoom, CUR.def.homeZoom * 2.2)));
   if (c === S.target) return globleEnd(true);
+  globleFrame();
   globleRender();
   const m = document.getElementById('gmsg');
   m.textContent = d === 0 ? `${c.name} borders the mystery ${CUR.def.unit}.` : `${c.name} is ${fmtKm(d)} away.`;
 }
 function globleEnd(won) {
-  S.done = true; S.won = won;
+  S.done = true; S.won = won; resumeSave(null);
   if (won) STATS.globle.push(S.guesses.length);
   mark(S.target, !won || S.guesses.length > 8); save();
   globleRender();
@@ -1738,16 +1807,26 @@ function neighborsCheck() {
 // ----- Closer -----
 function closerStart() {
   if (pool().length < 1 || CUR.playable.length < 3) return noScope();
-  let x, a, b, da, db, tries = 0;
-  do {
-    x = pickTarget(pool(), false); // record only the final choice, not every rejected try
-    const others = CUR.playable.filter(c => c !== x);
-    const near = others.sort((p, q) => haversine(p.centroid, x.centroid) - haversine(q.centroid, x.centroid)).slice(0, 40);
-    a = pick(near); b = pick(near);
-    tries++;
-    if (a === b) continue;
-    da = unitDist(a, x); db = unitDist(b, x);
-  } while ((a === b || Math.abs(da - db) < 0.25 * Math.max(da, db, 1) || (da === 0 && db === 0)) && tries < 60);
+  // A pair is worth asking only if the gap is real knowledge: the farther one at least ~1.8x the nearer
+  // and a clear absolute margin (scaled to the level: ~630 km for countries, ~140-320 km for states).
+  const floor = 0.7 * (CUR.def.decay || 300);
+  const clear = (d1, d2) => { const lo = Math.min(d1, d2), hi = Math.max(d1, d2); return hi - lo >= floor && hi >= 1.8 * lo; };
+  const good = (d1, d2) => { const lo = Math.min(d1, d2), hi = Math.max(d1, d2); return lo > 0 && hi <= 5 * lo; }; // not trivially lopsided
+  let x = null, a = null, b = null, da = 0, db = 0;
+  for (let tries = 0; tries < 12 && !a; tries++) {
+    const t = pickTarget(pool(), false); // record only the final choice, not every rejected try
+    const near = CUR.playable.filter(c => c !== t).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid)).slice(0, 40).map(c => ({ c, d: unitDist(c, t) }));
+    const pairs = [];
+    for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) if (clear(near[i].d, near[j].d)) pairs.push([near[i], near[j]]);
+    if (!pairs.length) continue;
+    const nice = pairs.filter(([p, q]) => good(p.d, q.d));
+    const [p, q] = shuffle(pick(nice.length ? nice : pairs));
+    x = t; a = p.c; da = p.d; b = q.c; db = q.d;
+  }
+  if (!a) { // tiny scopes: fall back to any two different neighbours of a target
+    x = pickTarget(pool(), false);
+    const others = shuffle(CUR.playable.filter(c => c !== x)); a = others[0]; b = others[1]; da = unitDist(a, x); db = unitDist(b, x);
+  }
   remember(x.key, x.name);
   S.x = x; S.a = a; S.b = b; S.da = da; S.db = db; S.answered = false;
   flyHome();
@@ -1771,11 +1850,15 @@ function closerAnswer(k) {
   if (S.answered) return; S.answered = true;
   const right = S.da < S.db ? 'a' : 'b', correct = k === right;
   STATS.streaks.closer = correct ? (STATS.streaks.closer || 0) + 1 : 0;
+  streakHint('closer');
   mark(S.x, !correct); save();
   panel.querySelectorAll('#copts .btn').forEach(b => { if (b.dataset.k === right) b.classList.add('ok'); else if (b.dataset.k === k) b.classList.add('bad'); });
   G.fill = c => c === S.x ? cssVar('--accent') : c === S.a ? globleColor(S.da) : c === S.b ? globleColor(S.db) : null;
   G.stroke = c => (c === S.a || c === S.b) ? cssVar('--text') : null;
   G.hover = true;
+  G.markers = [{ p: S.x.anchor, color: cssVar('--accent'), r: 5, label: S.x.name },
+    { p: S.a.anchor, color: right === 'a' ? cssVar('--ok') : cssVar('--bad'), r: 4, label: `${S.a.name} · ${S.da === 0 ? 'borders' : fmtKm(S.da)}` },
+    { p: S.b.anchor, color: right === 'b' ? cssVar('--ok') : cssVar('--bad'), r: 4, label: `${S.b.name} · ${S.db === 0 ? 'borders' : fmtKm(S.db)}` }];
   const mid = d3.geoInterpolate(S.a.centroid, S.b.centroid)(0.5);
   const spread = Math.max(haversine(S.a.centroid, S.x.centroid), haversine(S.b.centroid, S.x.centroid), haversine(S.a.centroid, S.b.centroid));
   flyTo(d3.geoInterpolate(mid, S.x.centroid)(0.5), Math.max(1, Math.min(8, 6000 / Math.max(spread, 600))));
@@ -1816,6 +1899,7 @@ function nameitAnswer(i) {
   if (S.answered) return; S.answered = true;
   const correct = S.opts[i] === S.t;
   STATS.streaks.nameit = correct ? (STATS.streaks.nameit || 0) + 1 : 0;
+  streakHint('nameit');
   mark(S.t, !correct); save();
   panel.querySelectorAll('#nopts .btn').forEach(b => { const c = S.opts[+b.dataset.i]; if (c === S.t) b.classList.add('ok'); else if (+b.dataset.i === i) b.classList.add('bad'); });
   G.hover = true;
@@ -1861,6 +1945,7 @@ function flagsAnswer(i) {
   if (S.answered) return; S.answered = true;
   const correct = S.opts[i] === S.t;
   STATS.streaks.flags = correct ? (STATS.streaks.flags || 0) + 1 : 0;
+  streakHint('flags');
   mark(S.t, !correct); save();
   panel.querySelectorAll('#fopts .btn').forEach(b => { const c = S.opts[+b.dataset.i]; if (c === S.t) b.classList.add('ok'); else if (+b.dataset.i === i) b.classList.add('bad'); });
   G.fill = c => c === S.t ? cssVar('--accent') : null;
@@ -1900,8 +1985,9 @@ function cluesStart() {
   const byDist = all.filter(c => c !== t).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid));
   const cont = byDist.filter(c => c.region === t.region).slice(0, 12);
   const base = cont.length >= 3 ? cont : byDist.slice(0, 12);
-  const sameSide = base.filter(c => window.CLUES[c.name].drive === window.CLUES[t.name].drive);
-  S.t = t; S.opts = shuffle([t, ...shuffle(sameSide.length >= 3 ? sameSide : base).slice(0, 3)]); S.answered = false;
+  const same = c => window.CLUES[c.name].drive === window.CLUES[t.name].drive;
+  const sameSide = base.filter(same), sameNear = byDist.filter(same).slice(0, 8); // e.g. Guyana: Caribbean, not Andes
+  S.t = t; S.opts = shuffle([t, ...shuffle(sameSide.length >= 3 ? sameSide : sameNear.length >= 3 ? sameNear : base).slice(0, 3)]); S.answered = false;
   const keys = shuffle(Object.keys(window.CLUES[t.name]).filter(k => k !== 'tld'));
   S.shown = keys.slice(0, 3); S.hidden = keys.slice(3);
   cluesRender();
@@ -1926,6 +2012,7 @@ function cluesAnswer(i) {
   if (S.answered) return; S.answered = true;
   const correct = S.opts[i] === S.t;
   STATS.streaks.clues = correct ? (STATS.streaks.clues || 0) + 1 : 0;
+  streakHint('clues');
   mark(S.t, !correct); save();
   panel.querySelectorAll('#clopts .btn').forEach(b => { const c = S.opts[+b.dataset.i]; if (c === S.t) b.classList.add('ok'); else if (+b.dataset.i === i) b.classList.add('bad'); });
   G.fill = c => c === S.t ? cssVar('--accent') : null;
@@ -1946,7 +2033,7 @@ function cluesAnswer(i) {
 document.getElementById('statsbtn').onclick = () => openStats();
 function openStats() {
   stashView();
-  resetGlobe(); G.hover = true; [...nav.children].forEach(b => b.classList.remove('on')); mode = 'stats'; updateLabelButton(); syncHash();
+  resetGlobe(); G.hover = true; [...nav.children].forEach(b => b.classList.remove('on')); mode = 'stats'; layoutFor('stats'); updateLabelButton(); syncHash();
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   const rows = Object.entries(STATS.units).filter(([, v]) => v.seen >= 2 && v.miss > 0).map(([k, v]) => ({ k, rate: v.miss / v.seen, ...v })).sort((a, b) => b.rate - a.rate || b.seen - a.seen);
   const weak = rows.slice(0, 20);

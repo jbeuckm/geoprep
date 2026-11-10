@@ -30,6 +30,7 @@ window.WORLD_REGIONS = {
 "Caribbean":["Cuba","Jamaica","Haiti","Dominican Republic","Bahamas","Trinidad and Tobago","Barbados","Saint Lucia","Grenada","Dominica","Antigua and Barbuda","Saint Kitts and Nevis","Saint Vincent and the Grenadines"],
 "Andes":["Colombia","Venezuela","Ecuador","Peru","Bolivia","Chile"],
 "Southern Cone & Atlantic South America":["Brazil","Argentina","Uruguay","Paraguay","Guyana","Suriname"],
+"USA & Canada":["United States","Canada","Mexico","Bahamas","Cuba","Greenland","Bermuda","St. Pierre and Miquelon"],
 "South Pacific":["Australia","New Zealand","Papua New Guinea","Fiji","Solomon Islands","Vanuatu","Samoa","Tonga","Kiribati","Micronesia","Marshall Islands","Palau","Nauru"],
 };
 

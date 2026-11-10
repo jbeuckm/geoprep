@@ -28,11 +28,11 @@ Everything below is the manual mode, for people who want to steer.
 
 ## Levels and scope
 
-The region button in the header (it reads, say, **World · Western Europe ▾**) sets what every mode uses. It opens a map of the level coloured by region: hover or tap a region to see what it covers, click (or tap twice) to choose it. Tabs along the top switch level; on the world map, *Group by* switches between continents and the 20 study regions, and a country that sits in two study regions (Turkey, say) asks which one. The same choices are listed under the map for keyboards and for regions too small to tap. Every drill's *Scope* line has a **change** link that opens the same map.
+The region button in the header (it reads, say, **World · Western Europe ▾**) sets what every mode uses. It opens a map of the level coloured by region: hover or tap a region to see what it covers, click (or tap twice) to choose it. Tabs along the top switch level; on the world map, *Group by* switches between continents and the 21 study regions, and a country that sits in two study regions (Turkey, say) asks which one. The same choices are listed under the map for keyboards and for regions too small to tap. Every drill's *Scope* line has a **change** link that opens the same map.
 
 | Level | Units | Regions | Extra prompts |
 |---|---|---|---|
-| World | 196 countries (1:50m, includes microstates and Pacific nations) | 6 continents + 20 study regions (Balkans, Stans, Sahel, Caribbean, South Pacific, ...) | 190 capitals, 100 cities, 90 landmarks |
+| World | 196 countries (1:50m, includes microstates and Pacific nations) | 6 continents + 21 study regions (Balkans, Stans, Sahel, Caribbean, South Pacific, ...) | 190 capitals, 100 cities, 90 landmarks |
 | United States | 50 states + DC | Census regions | state capitals |
 | India | 28 states + 8 UTs | North / West / Central / East / Northeast / South | capitals, 84 cities, 15 landmarks |
 | China | 31 provinces-level units | 6 geographic regions | capitals, 60 cities, 12 landmarks |
@@ -50,7 +50,7 @@ The region button in the header (it reads, say, **World · Western Europe ▾**)
 | Tap | 5-question rounds: tap a unit, capital, city or landmark on the globe. Inside the border = 100, else exponential falloff with distance (tighter scale for sub-national levels) | placement |
 | Hot & Cold | A hidden unit; each guess is coloured by border-to-border distance. Region hint, give-up reveal | hot/cold |
 | Borders | Pick every land neighbour of a unit from nearby distractors, or "no land borders" | hot/cold |
-| Closer | Which of two nearby units is closer to the target (border distance) | hot/cold |
+| Closer | Which of two nearby units is closer to the target (border distance). Pairs always differ clearly: the farther one is at least 1.8 times as far, and by a real margin (about 630 km between countries, 140 to 320 km between states) | hot/cold |
 | Name It | A unit is highlighted with no labels; choose its name from four nearby options. Nearby countries outside the options are labelled for orientation | placement |
 | Flags | A national flag; choose the country from four regional neighbours (world level) | all |
 | Clues | Three street-level clues (driving side, road lines, poles, signs, plates, camera-car quirks, language); pick the country from four same-side neighbours. Reveal more clues on demand | street |
@@ -76,7 +76,7 @@ Mode slugs: `train study explore tap hotcold borders closer nameit flags clues s
 
 **Share** in the header copies a link to what you are looking at, or opens the phone share sheet. In Tap it shares the round's five questions (planned when the round starts); in Hot & Cold it shares the hidden country; after finishing, your score or guess count rides along and the friend sees it as the score to beat. Answers travel by name, scrambled so that neither the URL nor a base64 decoder shows them (this is not security, just spoiler protection). Older plain-base64 links and `?level=&region=` links still work. A damaged link opens a fresh game and says so.
 
-Leaving a Tap round, Hot & Cold game or training set mid-way (Back, another mode, a level change) keeps it: coming back to the same address picks up where you were. Pressing the current mode's button again starts afresh.
+Leaving a Tap round, Hot & Cold game or training set mid-way (Back, another mode, a level change) keeps it: coming back to the same address picks up where you were. Tap rounds and Hot & Cold games are also saved on the device, so a reload or the phone closing the app doesn't lose them. Pressing the current mode's button again starts afresh.
 
 ## Data
 
