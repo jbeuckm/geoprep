@@ -26,6 +26,8 @@ The landing screen offers four programmes: **Locate** (tap, shapes, flags), **Ho
 
 Everything below is the manual mode, for people who want to steer.
 
+On phones the drills sit behind a tab bar at the bottom: **Train, Study, Explore, Drills, Stats**. Drills opens a sheet of all seven drills with a line on each, and the tab then names the drill you are in. On desktop the drills stay as tabs in the header.
+
 ## Levels and scope
 
 The region button in the header (it reads, say, **World · Western Europe ▾**) sets what every mode uses. It opens a map of the level coloured by region: hover or tap a region to see what it covers, click (or tap twice) to choose it. Tabs along the top switch level; on the world map, *Group by* switches between continents and the 21 study regions, and a country that sits in two study regions (Turkey, say) asks which one. The same choices are listed under the map for keyboards and for regions too small to tap. Every drill's *Scope* line has a **change** link that opens the same map.
@@ -47,7 +49,7 @@ The region button in the header (it reads, say, **World · Western Europe ▾**)
 |---|---|---|
 | Study | Region list with capitals, neighbour counts and city counts. Click a unit to fly to it with its cities pinned. Tour auto-cycles the scope. Buttons launch any drill on the same scope. | both |
 | Explore | Hover/click any unit: name, neighbours, capital, cities | both |
-| Tap | 5-question rounds: tap a unit, capital, city or landmark on the globe. Inside the border = 100, else exponential falloff with distance (tighter scale for sub-national levels) | placement |
+| Tap | 5-question rounds: tap a unit, capital, city or landmark on the globe. The first question frames the scope; after that the globe stays where you left it. Inside the border = 100, else exponential falloff with distance (tighter scale for sub-national levels) | placement |
 | Hot & Cold | A hidden unit; each guess is coloured by border-to-border distance. Region hint, give-up reveal | hot/cold |
 | Borders | Pick every land neighbour of a unit from nearby distractors, or "no land borders" | hot/cold |
 | Closer | Which of two nearby units is closer to the target (border distance). Pairs always differ clearly: the farther one is at least 1.8 times as far, and by a real margin (about 630 km between countries, 140 to 320 km between states) | hot/cold |

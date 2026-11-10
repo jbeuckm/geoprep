@@ -3,7 +3,7 @@
    Scope: any level can be narrowed to a region; every drill and the study guide respect it. */
 (() => {
 'use strict';
-const APP_VERSION = 'v26'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v27'; // keep in step with VERSION in sw.js
 const REDUCED = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---------- Names (world level) ----------
@@ -825,6 +825,7 @@ document.getElementById('lbl').onclick = () => {
   try { localStorage.setItem('geodrill.labels', String(LABELS.level)); } catch (e) {}
   updateLabelButton(); render();
 };
+function homeZoom() { return REGION === 'All' || !pool().length ? CUR.def.homeZoom : Math.max(CUR.def.homeZoom, frameZoom(pool(), 0.8, true).zoom); }
 function flyHome() {
   if (REGION === 'All' || !pool().length) return flyTo(CUR.def.home, CUR.def.homeZoom);
   const fr = frameZoom(pool(), 0.8, true);
@@ -1167,7 +1168,60 @@ const MODES = [['train', 'Train'], ['study', 'Study'], ['explore', 'Explore'], [
 let mode = null, S = {}, tourTimer = null;
 const nav = document.getElementById('nav');
 MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => { const again = id === mode && !TRAIN.active; stashView(); if (id !== 'train') trainStop(true); setMode(id, again); }; nav.appendChild(b); });
-function layoutFor(id) { if (document.body.dataset.mode !== id) { document.body.dataset.mode = id; resize(); } }
+// ---------- Phone navigation: bottom tab bar + drills sheet (the header tabs are hidden on narrow screens) ----------
+const DRILLS = [
+  ['tap', 'Find places on the map: countries, capitals, cities'],
+  ['globle', 'Find a hidden country from warm and cold guesses'],
+  ['neighbors', 'Pick every neighbour of a country'],
+  ['closer', 'Which of two is nearer to a target?'],
+  ['nameit', 'Name the highlighted shape'],
+  ['flags', 'Whose flag is this?'],
+  ['clues', 'Street-level clues: roads, signs, poles'],
+];
+const DRILL_IDS = new Set(DRILLS.map(d => d[0]));
+const tabbar = document.getElementById('tabbar'), sheet = document.getElementById('drillsheet');
+const ICONS = {
+  train: '<path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2" fill="currentColor"/>',
+  study: '<path d="M4 5.5C6.5 4 9.5 4 12 5.5v14C9.5 18 6.5 18 4 19.5zM20 5.5C17.5 4 14.5 4 12 5.5v14c2.5-1.5 5.5-1.5 8 0z"/>',
+  explore: '<circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/>',
+  drills: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/>',
+  stats: '<path d="M5 20V11M12 20V5M19 20v-6"/>',
+};
+const icon = k => `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICONS[k]}</svg>`;
+const modeLabel = id => (MODES.find(m => m[0] === id) || [])[1] || id;
+tabbar.innerHTML = [['train', 'Train'], ['study', 'Study'], ['explore', 'Explore'], ['drills', 'Drills'], ['stats', 'Stats']]
+  .map(([k, t]) => `<button data-tab="${k}">${icon(k)}<span>${t}</span></button>`).join('');
+sheet.innerHTML = `<div class="ds-box" role="dialog" aria-modal="true" aria-labelledby="ds-title"><div class="ds-head"><h2 id="ds-title">Drills</h2><button class="iconbtn ds-close" aria-label="Close">✕</button></div>
+  <div class="ds-list">${DRILLS.map(([id, d]) => `<button data-drill="${id}"><b>${esc(modeLabel(id))}</b><small>${esc(d)}${id === 'flags' || id === 'clues' ? ' · world' : ''}</small></button>`).join('')}</div></div>`;
+function syncTabbar(id) {
+  const tab = TRAIN.active ? 'train' : DRILL_IDS.has(id) ? 'drills' : id;
+  tabbar.querySelectorAll('[data-tab]').forEach(b => { const on = b.dataset.tab === tab; b.classList.toggle('on', on); b.setAttribute('aria-current', on ? 'page' : 'false'); });
+  // The Drills tab names the drill you are in, so you can see where you are.
+  tabbar.querySelector('[data-tab=drills] span').textContent = !TRAIN.active && DRILL_IDS.has(id) ? modeLabel(id) : 'Drills';
+  sheet.querySelectorAll('[data-drill]').forEach(b => b.classList.toggle('on', b.dataset.drill === id && !TRAIN.active));
+}
+const navTo = id => { const b = nav.querySelector(`[data-id="${id}"]`); if (b) b.click(); };
+let sheetBack = null;
+function openSheet() { sheetBack = document.activeElement; sheet.hidden = false; (sheet.querySelector('[data-drill].on') || sheet.querySelector('[data-drill]')).focus(); }
+function closeSheet() { if (sheet.hidden) return; sheet.hidden = true; if (sheetBack && sheetBack.focus) sheetBack.focus(); }
+tabbar.addEventListener('click', e => {
+  const b = e.target.closest('[data-tab]'); if (!b) return;
+  const k = b.dataset.tab;
+  if (k === 'drills') return sheet.hidden ? openSheet() : closeSheet();
+  closeSheet();
+  if (k === 'stats') return openStats();
+  navTo(k);
+});
+sheet.addEventListener('click', e => {
+  if (e.target === sheet || e.target.closest('.ds-close')) return closeSheet();
+  const b = e.target.closest('[data-drill]'); if (!b) return;
+  closeSheet(); navTo(b.dataset.drill);
+});
+document.addEventListener('keydown', e => {
+  if (sheet.hidden) return;
+  if (e.key === 'Escape') { e.preventDefault(); closeSheet(); }
+}, true);
+function layoutFor(id) { syncTabbar(id); if (document.body.dataset.mode !== id) { document.body.dataset.mode = id; resize(); } }
 let FRESH = false; // the current mode was started afresh (its own tab pressed again): don't resume a saved game
 function setMode(id, fresh = false) {
   updateScopeBtn(); layoutFor(id); FRESH = fresh;
@@ -1184,7 +1238,7 @@ function setMode(id, fresh = false) {
   (fn || studyStart)();
 }
 document.addEventListener('keydown', e => {
-  if (PK) return; // the region picker handles its own keys
+  if (PK || !sheet.hidden) return; // the region picker and drills sheet handle their own keys
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const tag = (document.activeElement && document.activeElement.tagName) || '';
   if (['INPUT', 'SELECT', 'TEXTAREA'].includes(tag)) return;
@@ -1326,6 +1380,7 @@ function advance(fn) {
 }
 function trainBar() {
   const el = document.getElementById('trainbar');
+  document.body.classList.toggle('training', !!(TRAIN.active && TRAIN.topic) && TRAIN.phase !== 'review');
   if (!TRAIN.active || !TRAIN.topic) { el.innerHTML = ''; return; }
   const st = topicStats(TRAIN.topic), p = PROGRAMS[TRAIN.program];
   const reason = TRAIN.phase === 'review' ? `You missed ${TRAIN.setMiss} of ${TRAIN.setSeen} here. Have a look, then try it again.`
@@ -1508,7 +1563,10 @@ function chooseTapQuestion(taken) {
 function planTapRound() { const plan = []; while (plan.length < S.n) plan.push(chooseTapQuestion(plan)); return plan; }
 function tapNext() {
   resetGlobe(); canvas.classList.add('tap');
-  flyHome(); // each question starts from the whole scope, not zoomed in on the last answer
+  // The first question frames the scope. After that the globe stays where you left it (no spinning back to a
+  // fixed home view); if you were zoomed in past the scope's framing, it only zooms back out, without turning.
+  if (!S.viewSet) { S.viewSet = true; flyHome(); }
+  else { const z = homeZoom(); if (G.zoom > z) flyTo([-G.rotate[0], -G.rotate[1]], z, 500); }
   S.q = S.plan[S.round.length] || chooseTapQuestion(S.round.map(r => r.q)); S.answered = false;
   G.onTap = tapAnswer;
   tapRender();
@@ -2086,7 +2144,7 @@ loadLevel('world').then(w => {
 }).then(() => {
   // Test/automation hook: lets a script "tap" at a latitude/longitude it believes is right, and inspect state.
   window.__geo = {
-    levels: LEVEL_DEFS, get level() { return CUR; }, get world() { return WORLD; }, get region() { return REGION; }, get mode() { return mode; },
+    levels: LEVEL_DEFS, get level() { return CUR; }, get world() { return WORLD; }, get region() { return REGION; }, get mode() { return mode; }, get view() { return { rotate: G.rotate.slice(), zoom: G.zoom }; },
     pool, unitDist, findUnit, unitAt, pointToUnitDist, setMode, setLevel,
     tapLatLon(lat, lon) { if (!G.onTap) return false; G.onTap([lon, lat]); return true; },
     render, get G() { return G; }, get TRAIN() { return TRAIN; }, applyRoute, routePath, shareLink,
