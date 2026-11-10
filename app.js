@@ -471,6 +471,10 @@ function render() {
       if (!hits(r)) { placed.push(r); ctx.fillStyle = cssVar('--panel-faint'); ctx.fillRect(r.x, r.y, w, h); ctx.fillStyle = cssVar('--muted'); ctx.fillText(m.label, lx, ly); }
       ctx.textAlign = 'start'; continue;
     }
+    if (m.pulse) { // a ring that expands and fades for 0.8s, so a just-placed marker is easy to spot
+      const t = (performance.now() - m.pulse) / 800;
+      if (t < 1) { ctx.beginPath(); ctx.arc(x, y, (m.r || 6) + 4 + t * 16, 0, 2 * Math.PI); ctx.globalAlpha = 1 - t; ctx.strokeStyle = m.color; ctx.lineWidth = 2.5; ctx.stroke(); ctx.globalAlpha = 1; }
+    }
     ctx.beginPath(); ctx.arc(x, y, m.r || 6, 0, 2 * Math.PI); ctx.fillStyle = m.color; ctx.fill();
     ctx.lineWidth = 2; ctx.strokeStyle = '#fff'; ctx.stroke();
     if (m.label) {
@@ -486,6 +490,8 @@ function render() {
   if (LABELS.level > 0 && labelsAllowed() && !G.coarse) drawLearningLabels(center, placed, hits);
   ctx.beginPath(); G.path({ type: 'Sphere' }); ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke();
 }
+let pulseTimer = null;
+function pulseMarkers() { if (pulseTimer) pulseTimer.stop(); pulseTimer = d3.timer(el => { render(); if (el > 850) { pulseTimer.stop(); pulseTimer = null; } }); }
 function flyTo(lonlat, zoom, ms = 900) {
   if (G.anim) G.anim.stop();
   const from = G.rotate.slice(), fz = G.zoom, tz = zoom == null ? G.zoom : zoom;
@@ -1119,15 +1125,30 @@ function tapAnswer(p) {
   S.round.push({ q, score, d, p, target, inside });
   const okc = cssVar('--ok'), badc = cssVar('--bad');
   if (q.kind === 'unit') G.fill = x => x === q.c ? okc : null;
-  G.markers = [{ p: target, color: okc, label: q.kind === 'unit' ? (inside ? q.c.name : q.c.name + ' border') : q.pl.name }];
-  if (!inside) { G.markers.push({ p, color: badc, label: 'you' }); G.lines = [{ a: p, b: target }]; }
+  // Your tap is always marked exactly where it landed. A hit is green; the answer gets a name label, not a second dot.
+  const you = { p, color: inside ? okc : badc, r: 7, label: inside ? 'you ✓' : 'you', pulse: performance.now() };
+  if (inside) {
+    G.markers = [you];
+    if (q.kind === 'unit') G.markers.push({ p: q.c.anchor, label: q.c.name, textOnly: true });
+    else G.markers.push({ p: target, color: okc, r: 4, label: q.pl.name });
+  } else {
+    G.markers = [{ p: target, color: okc, label: q.kind === 'unit' ? q.c.name + ' border' : q.pl.name }, you];
+    G.lines = [{ a: p, b: target }];
+  }
   G.hover = true;
-  // Frame both dots: pick a zoom where the miss spans roughly a third of the globe view, so near misses are still visible.
-  const mid = d3.geoInterpolate(p, target)(0.5);
-  let zt, ct;
-  if (inside) { ct = target; zt = q.kind === 'unit' ? Math.max(1.2, zoomForUnit(q.c) * 0.9) : Math.max(G.zoom, 6); }
-  else { const theta = d3.geoDistance(p, target); ct = mid; zt = Math.max(1, Math.min(24, 0.7 / Math.max(theta, 1e-4))); }
-  flyTo(ct, zt);
+  // Keep the view still when both points are on screen and clearly apart, so your marker stays under your finger.
+  // Move only when the answer is off screen (frame both) or the two dots are too close to tell apart (zoom in on them).
+  const here = [-G.rotate[0], -G.rotate[1]];
+  const sp = G.projection(p), st = G.projection(target);
+  const onScreen = (ll, xy) => d3.geoDistance(ll, here) < Math.PI / 2 - 0.05 && xy[0] > 30 && xy[1] > 30 && xy[0] < G.w - 30 && xy[1] < G.h - 30;
+  const bothVisible = onScreen(p, sp) && onScreen(target, st);
+  const apart = Math.hypot(sp[0] - st[0], sp[1] - st[1]);
+  let ct = here, zt = G.zoom, move = false;
+  if (!inside && !(bothVisible && apart >= 40)) {
+    const theta = d3.geoDistance(p, target);
+    ct = d3.geoInterpolate(p, target)(0.5); zt = Math.max(bothVisible ? G.zoom : 1, Math.min(24, 0.7 / Math.max(theta, 1e-4))); move = true;
+  }
+  if (move) flyTo(ct, zt); else pulseMarkers();
   G.markers = G.markers.concat(contextLabels(ct, zt, new Set(q.kind === 'unit' ? [q.c] : q.pl.units)));
   const cls = score >= 80 ? 'ok' : score >= 40 ? 'warn' : 'bad';
   setTimeout(() => revealFeedback('#tapfb'), 50);
