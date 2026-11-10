@@ -3,7 +3,7 @@
    Scope: any level can be narrowed to a region; every drill and the study guide respect it. */
 (() => {
 'use strict';
-const APP_VERSION = 'v28'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v29'; // keep in step with VERSION in sw.js
 const REDUCED = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---------- Names (world level) ----------
@@ -2109,9 +2109,20 @@ function flagsAnswer(i) {
 
 // ----- Street clues -----
 const CLUE_LABELS = { drive: 'Drives on the', lines: 'Road lines', bollards: 'Bollards', poles: 'Utility poles', signs: 'Signs', plates: 'Plates', car: 'Camera car', lang: 'Language', tld: 'Domain', other: 'Also' };
-function clueRows(u, keys) {
+// In the quiz a language's name gives the country away. Show what its signs say instead, and blank language names
+// out of the other clues. Shared scripts (Latin, Cyrillic, Arabic) and English stay: you would see those on the street.
+const LANG_NAMES = /\b(in )?(Traditional Chinese|Simplified Chinese|Chinese|Japanese|Korean|Hangul|Irish|Greek|Finnish|Swedish|Danish|Norwegian|Ukrainian|Mongolian|Portuguese|Spanish|French|Dutch|German|Italian|Hindi|Devanagari|Bengali|Sinhala|Tamil|Thai|Khmer|Lao|Vietnamese|Malay|Indonesian|Filipino|Hebrew|Swahili|Māori|Maori)\b/g;
+function quizSafe(t) {
+  return t.replace(/\b(Dutch|Portuguese|French|Spanish|British) colonial/g, 'colonial')
+    .replace(LANG_NAMES, (m, inn) => inn ? 'in the local language' : 'local').replace(/\blocal(\/local)+/g, 'local')
+    .replace(/in the local language (Cyrillic|numerals|characters|script)/g, 'in local $1').replace(/Cyrillic local/g, 'Cyrillic').replace(/bilingual local\b(?!\/)/g, 'bilingual');
+}
+function clueRows(u, keys, quiz = false) {
   const c = window.CLUES[u.name]; if (!c) return '';
-  return `<div class="clues">${(keys || Object.keys(c)).filter(k => c[k]).map(k => `<div class="clue"><span class="ck">${CLUE_LABELS[k] || k}</span><span>${esc(c[k])}</span></div>`).join('')}</div>`;
+  const sample = (window.SIGN_SAMPLES || {})[u.name];
+  const val = k => k === 'lang' ? (quiz ? sample : c.lang + (sample ? ` · signs read: ${sample}` : '')) : quiz ? quizSafe(c[k]) : c[k];
+  const label = k => k === 'lang' && quiz ? 'Signs read' : CLUE_LABELS[k] || k;
+  return `<div class="clues">${(keys || Object.keys(c)).filter(k => c[k] && val(k)).map(k => `<div class="clue"><span class="ck">${label(k)}</span><span${k === 'lang' && quiz ? ' class="sample"' : ''}>${esc(val(k))}</span></div>`).join('')}</div>`;
 }
 function clueCard(u) {
   if (!window.CLUES[u.name]) return '';
@@ -2143,7 +2154,7 @@ function cluesRender() {
     ${scopeLine()}
     <p class="sub">Which country matches these clues? Options share the driving side and region, so the details decide it.</p>
     <div class="hint streak">Running streak ${st}</div>
-    ${clueRows(S.t, S.shown)}
+    ${clueRows(S.t, S.shown, true)}
     <div class="row" style="margin:6px 0 10px">${S.hidden.length ? '<button class="btn sec" id="morec">Reveal another clue</button>' : ''}</div>
     <div class="opts" id="clopts">${S.opts.map((c, i) => `<button class="btn" data-i="${i}">${esc(c.name)}</button>`).join('')}</div>
     <div id="clfb" aria-live="polite"></div>
