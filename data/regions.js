@@ -6,7 +6,7 @@ window.WORLD_CONTINENTS = {
 "Asia":["Afghanistan","Armenia","Azerbaijan","Bangladesh","Bhutan","Brunei","Cambodia","China","Georgia","India","Indonesia","Iran","Iraq","Israel","Japan","Jordan","Kazakhstan","Kuwait","Kyrgyzstan","Laos","Lebanon","Malaysia","Mongolia","Myanmar","Nepal","North Korea","Oman","Pakistan","Palestine","Philippines","Qatar","Saudi Arabia","South Korea","Sri Lanka","Syria","Taiwan","Tajikistan","Thailand","Timor-Leste","Turkey","Turkmenistan","United Arab Emirates","Uzbekistan","Vietnam","Yemen","Bahrain","Maldives","Singapore","Hong Kong","Macao"],
 "North America":["Bahamas","Belize","Canada","Costa Rica","Cuba","Dominican Republic","El Salvador","Guatemala","Haiti","Honduras","Jamaica","Mexico","Nicaragua","Panama","United States","Trinidad and Tobago","Greenland","Puerto Rico","Antigua and Barbuda","Barbados","Dominica","Grenada","Saint Lucia","Saint Kitts and Nevis","Saint Vincent and the Grenadines","Anguilla","Aruba","Bermuda","British Virgin Islands","Cayman Islands","Curaçao","Montserrat","Sint Maarten","St-Barthélemy","St-Martin","St. Pierre and Miquelon","Turks and Caicos Islands","U.S. Virgin Islands"],
 "South America":["Argentina","Bolivia","Brazil","Chile","Colombia","Ecuador","Guyana","Paraguay","Peru","Suriname","Uruguay","Venezuela","Falkland Islands","South Georgia"],
-"Oceania":["Australia","Fiji","New Zealand","Papua New Guinea","Solomon Islands","Vanuatu","New Caledonia","Kiribati","Marshall Islands","Micronesia","Nauru","Palau","Samoa","Tonga","American Samoa","Cook Islands","French Polynesia","Guam","Niue","Norfolk Island","Northern Mariana Islands","Pitcairn Islands","Wallis and Futuna","Ashmore and Cartier Islands","Heard and McDonald Islands","Indian Ocean Territories"],
+"Oceania":["Australia","Fiji","New Zealand","Papua New Guinea","Solomon Islands","Vanuatu","New Caledonia","Kiribati","Marshall Islands","Micronesia","Nauru","Palau","Samoa","Tonga","Tuvalu","American Samoa","Cook Islands","French Polynesia","Guam","Niue","Norfolk Island","Northern Mariana Islands","Pitcairn Islands","Wallis and Futuna","Ashmore and Cartier Islands","Heard and McDonald Islands","Indian Ocean Territories"],
 "Antarctica":["Antarctica","French Southern Lands"]
 };
 
@@ -31,7 +31,7 @@ window.WORLD_REGIONS = {
 "Andes":["Colombia","Venezuela","Ecuador","Peru","Bolivia","Chile"],
 "Southern Cone & Atlantic South America":["Brazil","Argentina","Uruguay","Paraguay","Guyana","Suriname"],
 "USA & Canada":["United States","Canada","Mexico","Bahamas","Cuba","Greenland","Bermuda","St. Pierre and Miquelon"],
-"South Pacific":["Australia","New Zealand","Papua New Guinea","Fiji","Solomon Islands","Vanuatu","Samoa","Tonga","Kiribati","Micronesia","Marshall Islands","Palau","Nauru"],
+"South Pacific":["Australia","New Zealand","Papua New Guinea","Fiji","Solomon Islands","Vanuatu","Samoa","Tonga","Kiribati","Micronesia","Marshall Islands","Palau","Nauru","Tuvalu"],
 };
 
 // Dependencies and non-sovereign entities: drawn on the map, never used as answers.

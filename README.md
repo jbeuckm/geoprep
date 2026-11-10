@@ -54,10 +54,12 @@ The region button in the header (it reads, say, **World · Western Europe ▾**)
 | Borders | Pick every land neighbour of a unit from nearby distractors, or "no land borders" | hot/cold |
 | Closer | Which of two nearby units is closer to the target (border distance). Pairs always differ clearly: the farther one is at least 1.8 times as far, and by a real margin (about 630 km between countries, 140 to 320 km between states) | hot/cold |
 | Name It | A unit is highlighted with no labels; choose its name from four nearby options. Nearby countries outside the options are labelled for orientation | placement |
-| Flags | A national flag; choose the country from four regional neighbours (world level) | all |
+| Flags | A national flag; choose the country from four options: lookalikes from the same flag family (Nordic crosses, Pan-Slavic and Pan-Arab colours…) plus neighbours (world level) | all |
 | Clues | Three street-level clues (driving side, road lines, poles, signs, plates, camera-car quirks, language); pick the country from four same-side neighbours. Reveal more clues on demand | street |
 
 In Study and Explore, the **Aa** button on the globe labels the map: one press names every unit in view (largest first, more appear as you zoom), a second adds capitals and cities, a third turns labels off. The setting is remembered, and the button is hidden in drills so it never gives answers away.
+
+Anywhere you type a name, postal and common abbreviations work too (NY, BC, NSW, SP, MH).
 
 Every mode records misses per unit in `localStorage`. Units you miss come up more often in all modes, and the **Stats** view maps them green-to-red and lists the weakest.
 
@@ -82,7 +84,8 @@ Leaving a Tap round, Hot & Cold game or training set mid-way (Back, another mode
 
 ## Data
 
-- `data/countries-50m.json`: Natural Earth 1:50m via world-atlas 2.0.2. Somaliland, Northern Cyprus, Western Sahara and Siachen are folded into Somalia, Cyprus, Morocco and India so the border graph matches Globle's country list. Crimea, which Natural Earth draws inside Russia, is moved to Ukraine at load time. Dependencies are drawn but never used as answers.
+- `data/countries-50m.json`: Natural Earth 1:50m via world-atlas 2.0.2. Somaliland, Northern Cyprus, Western Sahara and Siachen are folded into Somalia, Cyprus, Morocco and India so the border graph matches Globle's country list. Crimea, which Natural Earth draws inside Russia, is moved to Ukraine at load time. Tuvalu, missing at 1:50m, is added as its nine atolls. Long edges along a parallel (the US–Canada border) are densified so they follow the parallel. Land-border fixes: Spain–Morocco (Ceuta, Melilla) and Zambia–Botswana (Kazungula) are added; Illinois–Michigan and Minnesota–Michigan, which meet only across the lakes, are removed.
+- `data/lakes.json`: the 36 largest lakes from Natural Earth 1:50m, drawn as water on every level (the Great Lakes sit inside the state and province polygons). Dependencies are drawn but never used as answers.
 - `data/admin1/*.json`: Natural Earth 1:50m admin-1 (Russia from 1:10m, simplified). Crimea and Sevastopol are excluded from the Russia level.
 - `data/places.js`, `data/subcapitals.js`, `data/subcities.js`: hand-entered coordinates.
 - `data/regions.js`: continent, study-region and sub-national region membership.

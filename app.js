@@ -3,7 +3,7 @@
    Scope: any level can be narrowed to a region; every drill and the study guide respect it. */
 (() => {
 'use strict';
-const APP_VERSION = 'v27'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v28'; // keep in step with VERSION in sw.js
 const REDUCED = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---------- Names (world level) ----------
@@ -56,10 +56,44 @@ const LEVEL_DEFS = {
 // India: the 2014 transfer of the Bhadrachalam-area mandals to Andhra Pradesh is missing from Natural Earth.
 const ADJ_FIX = {
   india: { remove: [['Telangana', 'Odisha']], add: [['Andhra Pradesh', 'Chhattisgarh']] },
-  usa: { remove: [['Utah', 'New Mexico'], ['Arizona', 'Colorado']] }, // Four Corners: point contact only
+  usa: { remove: [['Utah', 'New Mexico'], ['Arizona', 'Colorado'], // Four Corners: point contact only
+    ['Illinois', 'Michigan'], ['Minnesota', 'Michigan']] }, // these meet only across Lake Michigan / Lake Superior
+  world: { add: [['Zambia', 'Botswana'], ['Spain', 'Morocco']] }, // Kazungula border; Ceuta and Melilla
 };
 // Far-flung dependencies bundled into a country's polygon that distort distances (kept drawn, dropped from maths).
 const PIECE_DROP = { 'New Zealand': c => c[1] > -25 /* Tokelau */ };
+// Postal and common abbreviations, accepted wherever a unit name can be typed.
+const POSTAL = {
+  usa: 'AL Alabama|AK Alaska|AZ Arizona|AR Arkansas|CA California|CO Colorado|CT Connecticut|DE Delaware|DC District of Columbia|FL Florida|GA Georgia|HI Hawaii|ID Idaho|IL Illinois|IN Indiana|IA Iowa|KS Kansas|KY Kentucky|LA Louisiana|ME Maine|MD Maryland|MA Massachusetts|MI Michigan|MN Minnesota|MS Mississippi|MO Missouri|MT Montana|NE Nebraska|NV Nevada|NH New Hampshire|NJ New Jersey|NM New Mexico|NY New York|NC North Carolina|ND North Dakota|OH Ohio|OK Oklahoma|OR Oregon|PA Pennsylvania|RI Rhode Island|SC South Carolina|SD South Dakota|TN Tennessee|TX Texas|UT Utah|VT Vermont|VA Virginia|WA Washington|WV West Virginia|WI Wisconsin|WY Wyoming',
+  canada: 'AB Alberta|BC British Columbia|MB Manitoba|NB New Brunswick|NL Newfoundland and Labrador|NS Nova Scotia|NT Northwest Territories|NWT Northwest Territories|NU Nunavut|ON Ontario|PE Prince Edward Island|PEI Prince Edward Island|QC Québec|SK Saskatchewan|YT Yukon',
+  australia: 'NSW New South Wales|VIC Victoria|QLD Queensland|SA South Australia|WA Western Australia|TAS Tasmania|NT Northern Territory|ACT Australian Capital Territory',
+  brazil: 'AC Acre|AL Alagoas|AP Amapá|AM Amazonas|BA Bahia|CE Ceará|DF Distrito Federal|ES Espírito Santo|GO Goiás|MA Maranhão|MT Mato Grosso|MS Mato Grosso do Sul|MG Minas Gerais|PA Pará|PB Paraíba|PR Paraná|PE Pernambuco|PI Piauí|RJ Rio de Janeiro|RN Rio Grande do Norte|RS Rio Grande do Sul|RO Rondônia|RR Roraima|SC Santa Catarina|SP São Paulo|SE Sergipe|TO Tocantins',
+  india: 'AP Andhra Pradesh|AR Arunachal Pradesh|AS Assam|BR Bihar|CG Chhattisgarh|CT Chhattisgarh|GA Goa|GJ Gujarat|HR Haryana|HP Himachal Pradesh|JH Jharkhand|KA Karnataka|KL Kerala|MP Madhya Pradesh|MH Maharashtra|MN Manipur|ML Meghalaya|MZ Mizoram|NL Nagaland|OD Odisha|OR Odisha|PB Punjab|RJ Rajasthan|SK Sikkim|TN Tamil Nadu|TS Telangana|TG Telangana|TR Tripura|UP Uttar Pradesh|UK Uttarakhand|UT Uttarakhand|WB West Bengal|AN Andaman and Nicobar|CH Chandigarh|DL Delhi|NCT Delhi|JK Jammu and Kashmir|J&K Jammu and Kashmir|LA Ladakh|LD Lakshadweep|PY Puducherry|DNHDD Dadra & Nagar Haveli and Daman & Diu',
+};
+// Tuvalu is missing from the 1:50m world map: its nine atolls are added as small islands.
+const TUVALU = [[179.20, -8.52], [176.13, -5.68], [176.32, -6.29], [177.34, -6.11], [177.15, -7.24], [178.68, -7.48], [178.40, -8.02], [179.83, -9.38], [179.47, -10.79]];
+function tuvaluFeature() {
+  const d = 0.03, polys = TUVALU.map(([x, y]) => [[[x - d, y - d], [x - d, y + d], [x + d, y + d], [x + d, y - d], [x - d, y - d]]]);
+  const f = { type: 'Feature', properties: { name: 'Tuvalu' }, geometry: { type: 'MultiPolygon', coordinates: polys } };
+  if (d3.geoArea(f) > 2 * Math.PI) polys.forEach(p => p[0].reverse()); // d3 wants clockwise rings
+  return f;
+}
+// Long east-west edges along a parallel (the 49th parallel, for one) would draw as great-circle chords and leave a
+// sliver against neighbouring maps that follow the parallel. Add points along the parallel instead.
+function densifyParallels(f) {
+  const g = f.geometry; if (!g) return f;
+  const ring = r => { const out = [r[0]]; for (let i = 1; i < r.length; i++) { const a = r[i - 1], b = r[i];
+    if (Math.abs(a[1] - b[1]) < 1e-6 && Math.abs(b[0] - a[0]) > 1 && Math.abs(b[0] - a[0]) < 180) { const n = Math.ceil(Math.abs(b[0] - a[0]) / 0.5); for (let k = 1; k < n; k++) out.push([a[0] + (b[0] - a[0]) * k / n, a[1]]); }
+    out.push(b); } return out; };
+  const coords = g.type === 'Polygon' ? g.coordinates.map(ring) : g.type === 'MultiPolygon' ? g.coordinates.map(p => p.map(ring)) : g.coordinates;
+  return { ...f, geometry: { ...g, coordinates: coords } };
+}
+let LAKES = null; // large lakes, drawn as water over every level (the Great Lakes sit inside state polygons)
+fetch('data/lakes.json').then(r => r.ok ? r.json() : null).then(fc => {
+  if (!fc) return;
+  for (const f of fc.features) if (d3.geoArea(f) > 2 * Math.PI) f.geometry.coordinates.forEach(p => p.forEach(r => r.reverse()));
+  LAKES = fc; render();
+}).catch(() => {});
 const LEVELS = {};           // id -> loaded level
 let WORLD = null, CUR = null; // base map level, current level
 let REGION = 'All';           // current region label within CUR
@@ -170,6 +204,8 @@ function buildLevel(id, topo) {
   const featsDraw = topojson.feature(fullTopo, fullTopo.objects[def.object]).features;
   const featsCoarse = topojson.feature(coarseTopo, coarseTopo.objects[def.object]).features;
   const nb = topojson.neighbors(obj.geometries);
+  if (isWorld && !feats.some(f => canonicalWorld(f.properties.name) === 'Tuvalu')) { const tv = tuvaluFeature(); feats.push(tv); featsDraw.push(tv); featsCoarse.push(tv); nb.push([]); }
+  if (isWorld) for (const a of [feats, featsDraw, featsCoarse]) for (let i = 0; i < a.length; i++) a[i] = densifyParallels(a[i]);
   const names = feats.map(f => isWorld ? canonicalWorld(f.properties.name) : f.properties.name);
   const groups = new Map();
   feats.forEach((f, i) => {
@@ -250,6 +286,7 @@ function buildLevel(id, topo) {
   const byName = new Map(units.map(u => [u.name, u]));
   const lookup = new Map();
   for (const u of units) { lookup.set(normalize(u.name), u); (ALIASES[u.name] || []).forEach(a => lookup.set(normalize(a), u)); }
+  for (const pair of (POSTAL[id] || '').split('|').filter(Boolean)) { const i = pair.indexOf(' '), u = units.find(x => x.name === pair.slice(i + 1)); if (u) lookup.set(normalize(pair.slice(0, i)), u); }
   // places for Tap mode
   let places;
   if (isWorld) places = window.PLACES.map(p => ({ name: p[0], where: p[1], p: [p[3], p[2]], kind: p[4], units: p[1].split(' / ').map(x => byName.get(x)).filter(Boolean) }));
@@ -284,6 +321,7 @@ function editDistance(a, b) {
 function resolveUnit(text) {
   const t = normalize(text); if (!t) return { unit: null, suggestions: [] };
   const exact = CUR.lookup.get(t); if (exact) return { unit: exact, suggestions: [] };
+  if (t.replace(/ /g, '').length <= 2) return { unit: null, suggestions: [] };
   const keys = [...CUR.lookup.keys()];
   if (t.length >= 3) {
     const pre = [...new Set(keys.filter(k => k.startsWith(t) || k.split(' ').some(w => w.startsWith(t))).map(k => CUR.lookup.get(k)))];
@@ -458,6 +496,7 @@ function render() {
   drawUnits(WORLD.units, land);
   strokeUnits(WORLD.units, border, 0.6);
   if (!CUR.isWorld) { drawUnits(CUR.units, landAlt); strokeUnits(CUR.units, border, 0.8); }
+  if (LAKES) { ctx.beginPath(); for (const f of LAKES.features) G.path(f); ctx.fillStyle = cssVar('--ocean'); ctx.fill(); ctx.strokeStyle = border; ctx.lineWidth = 0.5; ctx.stroke(); }
   for (const c of CUR.units) {
     const s = G.stroke(c); if (!s) continue;
     ctx.beginPath(); geomOf(c).forEach(ft => G.path(ft)); ctx.strokeStyle = s; ctx.lineWidth = 2; ctx.stroke();
@@ -660,7 +699,9 @@ async function applyRoute(hash) {
     ROUTING = false; ROUTE = {};
     // Show the address of what actually opened: unknown levels, regions or programmes fall back, and the bar says so.
     const keep = new URLSearchParams(); const qp = new URLSearchParams(location.hash.split('?')[1] || '');
-    for (const k of ['q', 's', 't', 'g', 'u']) if (qp.get(k)) keep.set(k, qp.get(k));
+    // A shared game's parameters stay only if that shared game actually opened (a damaged link starts afresh, so drop them).
+    const sharedTap = mode === 'tap' && S.shared, sharedHC = mode === 'globle' && S.shared;
+    for (const k of ['q', 's', 't', 'g', 'u']) if (qp.get(k) && (k === 'u' || ((k === 'q' || k === 's') ? sharedTap : sharedHC))) keep.set(k, qp.get(k));
     const want = '#' + routePath() + (keep.toString() && mode !== 'train' ? '?' + keep : '');
     if (CUR && location.hash !== want) history.replaceState(null, '', want);
   }
@@ -705,7 +746,7 @@ function restoreView(key) {
   Object.assign(G, { fill: s.G.fill, stroke: s.G.stroke, markers: s.G.markers, lines: s.G.lines, onTap: s.G.onTap, hover: s.G.hover, rotate: s.G.rotate, zoom: s.G.zoom, hoverName: null });
   canvas.classList.toggle('tap', s.G.tap); tip.style.display = 'none';
   panel.replaceChildren(s.frag);
-  [...nav.children].forEach(b => b.classList.toggle('on', b.dataset.id === mode));
+  [...nav.children].forEach(b => b.classList.toggle('on', b.dataset.id === (TRAIN.active ? 'train' : mode)));
   updateLabelButton(); trainBar(); syncHash(); render();
   return true;
 }
@@ -902,13 +943,24 @@ function resetGlobe() {
 
 // ---------- Globle colour scale ----------
 // Hot = red, cold = blue, so far guesses never look like land nobody has guessed. Dark mode gets a brighter hot end.
-const HC_LIGHT = ['#a50f15', '#e34a33', '#fc8d59', '#fdcc8a', '#d4e4ef', '#9ecae1', '#6baed6'];
-const HC_DARK = ['#ff4d3a', '#f46d43', '#fdae61', '#fee08b', '#a6cde6', '#6aa5d8', '#4f86c6'];
+// Every stop is saturated, so no guess looks like plain land (beige) or sea (pale blue).
+const HC_LIGHT = ['#8e0013', '#d7301f', '#f46d43', '#f2a516', '#3fb0b5', '#2c7fb8', '#253494'];
+const HC_DARK = ['#ff4d3a', '#ff7a45', '#ffa726', '#f5c518', '#4dd0c8', '#4ba3e3', '#6f7ff0'];
 const isDarkTheme = () => { const t = document.documentElement.dataset.theme; return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches; };
 const hcScales = {};
 function hcScale(world) { const k = (world ? 'w' : 's') + (isDarkTheme() ? 'd' : 'l');
-  return hcScales[k] ||= d3.scaleLinear().domain(world ? [0, 400, 1200, 3000, 6000, 10000, 15000] : [0, 100, 300, 800, 1500, 2500, 4000]).range(isDarkTheme() ? HC_DARK : HC_LIGHT).clamp(true); }
-const globleColorWorld = d => hcScale(true)(d), globleColorSub = d => hcScale(false)(d);
+  return hcScales[k] ||= d3.scaleLinear().domain(world ? [0, 400, 1200, 3000, 6000, 10000, 15000] : [0, 100, 300, 800, 1500, 2500, 4000]).range(isDarkTheme() ? HC_DARK : HC_LIGHT).interpolate(d3.interpolateHcl).clamp(true); }
+// A regional game spreads the scale over the region's own size, so 1,000 km and 2,400 km look different in Western Europe.
+const spanCache = new Map();
+function hcSpanK() {
+  if (!CUR || REGION === 'All') return 1;
+  const key = CUR.id + '|' + REGION; if (spanCache.has(key)) return spanCache.get(key);
+  const us = pool(); let m = 0;
+  for (let i = 0; i < us.length; i++) for (let j = i + 1; j < us.length; j++) m = Math.max(m, haversine(us[i].centroid, us[j].centroid));
+  const k = Math.max(0.15, Math.min(1, m / (CUR.isWorld ? 12000 : 3000)));
+  spanCache.set(key, k); return k;
+}
+const globleColorWorld = d => hcScale(true)(d / hcSpanK()), globleColorSub = d => hcScale(false)(d / hcSpanK());
 const globleColor = d => (CUR.isWorld ? globleColorWorld : globleColorSub)(d);
 
 // ---------- Scope controls ----------
@@ -1167,7 +1219,7 @@ const panel = document.getElementById('panel');
 const MODES = [['train', 'Train'], ['study', 'Study'], ['explore', 'Explore'], ['tap', 'Tap'], ['globle', 'Hot & Cold'], ['neighbors', 'Borders'], ['closer', 'Closer'], ['nameit', 'Name It'], ['flags', 'Flags'], ['clues', 'Clues']];
 let mode = null, S = {}, tourTimer = null;
 const nav = document.getElementById('nav');
-MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => { const again = id === mode && !TRAIN.active; stashView(); if (id !== 'train') trainStop(true); setMode(id, again); }; nav.appendChild(b); });
+MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => { const again = id === mode && !TRAIN.active; stashView(); trainStop(true); setMode(id, again); }; nav.appendChild(b); });
 // ---------- Phone navigation: bottom tab bar + drills sheet (the header tabs are hidden on narrow screens) ----------
 const DRILLS = [
   ['tap', 'Find places on the map: countries, capitals, cities'],
@@ -1232,7 +1284,7 @@ function setMode(id, fresh = false) {
   else if (!TRAIN.active && SNAP.has(routePath()) && restoreView(routePath())) return 'restored';
   updateLabelButton();
   syncHash();
-  [...nav.children].forEach(b => b.classList.toggle('on', b.dataset.id === id));
+  [...nav.children].forEach(b => b.classList.toggle('on', b.dataset.id === (TRAIN.active ? 'train' : id)));
   resetGlobe(); render();
   const fn = { train: trainLanding, study: studyStart, explore, tap: tapStart, globle: globleStart, neighbors: neighborsStart, closer: closerStart, nameit: nameitStart, flags: flagsStart, clues: cluesStart }[id];
   (fn || studyStart)();
@@ -1263,8 +1315,11 @@ function revealFeedback(sel) {
   if (window.innerWidth > 860) return;
   const el = document.querySelector(sel), side = document.getElementById('side');
   if (!el || !el.firstElementChild) return;
-  const top = el.firstElementChild.getBoundingClientRect().top - side.getBoundingClientRect().top + side.scrollTop - 8;
-  side.scrollTo({ top, behavior: 'smooth' }); // scroll the panel only, never the document
+  const st = side.getBoundingClientRect().top, opts = el.previousElementSibling && el.previousElementSibling.matches('.opts, .chips') ? el.previousElementSibling : null;
+  const fbTop = el.firstElementChild.getBoundingClientRect().top - st + side.scrollTop, fbBottom = el.firstElementChild.getBoundingClientRect().bottom - st + side.scrollTop;
+  const optTop = opts ? opts.getBoundingClientRect().top - st + side.scrollTop : fbTop;
+  const top = (fbBottom - optTop + 16 <= side.clientHeight ? optTop : fbTop) - 8; // your pick and its result together when they fit
+  side.scrollTo({ top, behavior: REDUCED() ? 'auto' : 'smooth' }); // scroll the panel only, never the document
 }
 function streakHint(k) { const h = panel.querySelector('.hint'); if (h && /streak/i.test(h.textContent)) h.textContent = 'Running streak ' + (STATS.streaks[k] || 0); }
 function coach(items) { return `<div class="coach"><b>Coach</b><ul>${items.map(i => `<li>${i}</li>`).join('')}</ul></div>`; }
@@ -1339,7 +1394,7 @@ function trainLanding() {
     <p class="sub">Pick what you're practising for. The app chooses the topics and drills, doubles down where you miss, and moves on when you're solid. No settings needed.</p>
     <div class="bigopts">${Object.entries(PROGRAMS).map(([id, p]) => `<button data-p="${id}"><b>${p.label}${saved === id ? ' <span class="muted small">· continue</span>' : ''}</b><small>${p.blurb}</small></button>`).join('')}</div>
     ${weak.length ? `<div class="small"><b>Where you've struggled:</b> ${weak.map(x => `${esc(x.t.label)} (${Math.round(100 * x.miss / x.seen)}% missed)`).join(', ')}</div>` : '<div class="small muted">No history yet. The first sets sample widely to find your weak spots.</div>'}
-    <div class="small muted" style="margin-top:14px">Prefer to steer yourself? Pick a drill from the tabs and a region with the map button. Training chooses its own regions. Sets are 5 questions, or one Tap round or Hot &amp; Cold game.</div>`;
+    <div class="small muted" style="margin-top:14px">Prefer to steer yourself? Open any drill or Study and choose a region with the map button at the top. Training picks its own regions. Sets are 5 questions, or one Tap round or Hot &amp; Cold game.</div>`;
   panel.querySelectorAll('.bigopts button').forEach(b => b.onclick = () => trainChoose(b.dataset.p));
 }
 function trainChoose(program) {
@@ -1514,7 +1569,7 @@ function tapStart() {
   if (!pool().length) return noScope();
   // A shared link carries the exact five questions; otherwise plan a fresh round now, so it can be shared at any point.
   S.plan = ROUTE.q ? decodePlan(ROUTE.q) : null;
-  if (ROUTE.q && !S.plan) toast("That shared round's link is damaged, so this is a new round.");
+  if (ROUTE.q && !S.plan) { toast("That shared round's link is damaged, so this is a new round."); ROUTE.q = null; cleanHash(); }
   S.shared = S.plan ? { score: ROUTE.s != null && /^\d+$/.test(ROUTE.s) ? Math.min(500, +ROUTE.s) : null } : null;
   if (!S.plan) {
     const saved = resumeTake('tap'), plan = saved && decodePlan(saved.plan);
@@ -1681,7 +1736,7 @@ function tapSummary() {
     ${S.round.map(r => `<div class="stat"><span>${esc(r.q.kind === 'unit' ? r.q.c.name : r.q.pl.name)}</span><b>${r.score} <span class="muted">(${fmtKm(r.d)})</span></b></div>`).join('')}
     </div>
     ${S.shared && S.shared.score != null ? `<div class="sharedbar">${total > S.shared.score ? '🏆 You beat your friend' : total === S.shared.score ? '🤝 A tie with your friend' : 'Your friend wins this one'} (they scored ${S.shared.score}/500).</div>` : ''}
-    <div class="row"><button class="btn" id="again">New round</button><button class="btn sec" id="sharer">Share this round${TRAIN.active ? '' : ' and your score'}</button></div>
+    <div class="row"><button class="btn" id="again">${TRAIN.active ? 'Next set' : 'New round'}</button><button class="btn sec" id="sharer">Share this round${TRAIN.active ? '' : ' and your score'}</button></div>
     ${tapHistory()}`;
   S.total = total; S.roundDone = true;
   document.getElementById('sharer').onclick = () => shareLink();
@@ -1694,7 +1749,7 @@ function globleStart() {
   const sharedTarget = ROUTE.t ? decodeUnit(ROUTE.t) : null;
   S.target = sharedTarget && sharedTarget.playable ? sharedTarget : pickTarget(pool());
   S.shared = sharedTarget ? { guesses: ROUTE.g && /^\d+$/.test(ROUTE.g) && +ROUTE.g >= 1 && +ROUTE.g <= CUR.playable.length ? +ROUTE.g : null } : null;
-  if (ROUTE.t && !(sharedTarget && sharedTarget.playable)) toast("That shared game's link is damaged, so this is a new hidden " + CUR.def.unit + '.');
+  if (ROUTE.t && !(sharedTarget && sharedTarget.playable)) { toast("That shared game's link is damaged, so this is a new hidden " + CUR.def.unit + '.'); ROUTE.t = null; cleanHash(); }
   S.guesses = []; S.done = false; S.won = false; S.hintsUsed = 0;
   const saved = !ROUTE.t && resumeTake('globle'), st = saved && CUR.byName.get(saved.t);
   if (st && st.playable) {
@@ -1727,7 +1782,7 @@ function globleRender() {
     <div class="row small muted" style="margin-top:6px"><span>Guesses: <b>${S.guesses.length}</b></span><span>·</span><span>Games: ${games.length}</span><span>·</span><span>Avg guesses: ${avg}</span></div>
     <div id="gres" aria-live="polite"></div>
     <ul class="glist">${sorted.map(g => `<li><span class="sw" style="background:${g.c === S.target ? cssVar('--ok') : globleColor(g.d)}"></span>${flagImg(g.c)}${esc(g.c.name)}<span class="d">${g.c === S.target ? 'found' : g.d === 0 ? 'borders it' : fmtKm(g.d)}</span></li>`).join('')}</ul>
-    <div class="row">${S.done ? '<button class="btn" id="gnew">New game</button>' : `<button class="btn sec" id="ghint" ${S.hintsUsed >= S.hints.length ? 'disabled' : ''}>Hint (${S.hints.length - S.hintsUsed} left)</button> <button class="btn sec" id="ggive">Give up</button>`}</div>
+    <div class="row">${S.done ? `<button class="btn" id="gnew">${TRAIN.active ? 'Next set' : 'New game'}</button>` : `<button class="btn sec" id="ghint" ${S.hintsUsed >= S.hints.length ? 'disabled' : ''}>Hint (${S.hints.length - S.hintsUsed} left)</button> <button class="btn sec" id="ggive">Give up</button>`}</div>
     ${coach([CUR.isWorld && REGION === 'All' ? 'Open with one guess per continent, spread out: e.g. Mexico, Germany, Egypt, India, Australia. Three or four openers anchor the search.'
         : `Open with two or three guesses at opposite edges of ${esc(scopeLabel())}. They anchor the search.`,
       'Treat your warmest guess as the anchor and walk its borders. Dark red means you share a border: list that country\'s neighbours and pick one that explains all previous colours.',
@@ -1735,7 +1790,7 @@ function globleRender() {
       'Colours reflect distance between borders, so a huge neighbour (Russia, Brazil) can read red while its far side is thousands of km away.'])}`;
   const f = document.getElementById('gform');
   if (f) {
-    const q = document.getElementById('gq'); q.focus();
+    const q = document.getElementById('gq'); if (!matchMedia('(pointer: coarse)').matches) q.focus(); // phones: no keyboard popping over the panel
     f.onsubmit = e => { e.preventDefault(); globleGuess(q.value); q.value = ''; };
     document.getElementById('ggive').onclick = () => globleEnd(false);
     document.getElementById('ghint').onclick = () => { if (S.hintsUsed >= S.hints.length) return; S.hintsUsed++; globleRender(); };
@@ -1750,7 +1805,10 @@ function globleRender() {
 }
 // Keep every guess in view: frame them all, never zooming in past the scope's usual close-up.
 function globleFrame() {
-  const gu = S.guesses.map(g => g.c); if (!gu.length) return;
+  if (!S.guesses.length) return;
+  const latest = S.guesses[S.guesses.length - 1].c, warmest = S.guesses.reduce((a, g) => g.d < a.d ? g : a).c;
+  let gu = [...new Set([latest, warmest])];
+  if (gu.length > 1 && d3.geoDistance(latest.centroid, warmest.centroid) > 1.6) gu = [latest]; // too far apart to share a view
   const fr = frameZoom(gu, 0.85);
   flyTo(gu.length > 1 ? fr.center : gu[0].centroid, Math.max(CUR.def.homeZoom * 0.8, Math.min(fr.zoom, CUR.def.homeZoom * 2.2)));
 }
@@ -1873,7 +1931,8 @@ function closerStart() {
   let x = null, a = null, b = null, da = 0, db = 0;
   for (let tries = 0; tries < 12 && !a; tries++) {
     const t = pickTarget(pool(), false); // record only the final choice, not every rejected try
-    const near = CUR.playable.filter(c => c !== t).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid)).slice(0, 40).map(c => ({ c, d: unitDist(c, t) }));
+    const base = tries < 8 && pool().length >= 6 ? pool() : CUR.playable; // options from the scope when it is big enough
+    const near = base.filter(c => c !== t).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid)).slice(0, 40).map(c => ({ c, d: unitDist(c, t) }));
     const pairs = [];
     for (let i = 0; i < near.length; i++) for (let j = i + 1; j < near.length; j++) if (clear(near[i].d, near[j].d)) pairs.push([near[i], near[j]]);
     if (!pairs.length) continue;
@@ -1895,7 +1954,7 @@ function closerRender() {
   panel.innerHTML = `<h2>Closer <span class="muted small">· distance intuition</span></h2>
     ${scopeLine()}
     <p class="sub">Which of the two is closer to the target? Distance is border-to-border, as in hot-and-cold games.</p>
-    <div class="hint">Running streak ${st}</div>
+    <div class="hint streak">Running streak ${st}</div>
     <div class="prompt">${flagImg(S.x, 'flag big')}${esc(S.x.name)}</div>
     <div class="opts" id="copts"><button class="btn" data-k="a">${flagImg(S.a)}${esc(S.a.name)}</button><button class="btn" data-k="b">${flagImg(S.b)}${esc(S.b.name)}</button></div>
     <div id="cfb" aria-live="polite"></div>
@@ -1911,7 +1970,8 @@ function closerAnswer(k) {
   streakHint('closer');
   mark(S.x, !correct); save();
   panel.querySelectorAll('#copts .btn').forEach(b => { if (b.dataset.k === right) b.classList.add('ok'); else if (b.dataset.k === k) b.classList.add('bad'); });
-  G.fill = c => c === S.x ? cssVar('--accent') : c === S.a ? globleColor(S.da) : c === S.b ? globleColor(S.db) : null;
+  const rc = right === 'a' ? S.a : S.b;
+  G.fill = c => c === S.x ? cssVar('--accent') : c === rc ? cssVar('--ok') : (c === S.a || c === S.b) ? cssVar('--bad') : null;
   G.stroke = c => (c === S.a || c === S.b) ? cssVar('--text') : null;
   G.hover = true;
   G.markers = [{ p: S.x.anchor, color: cssVar('--accent'), r: 5, label: S.x.name },
@@ -1934,7 +1994,12 @@ function nameitStart() {
   if (!pool().length || CUR.playable.length < 4) return noScope();
   const t = pickTarget(pool());
   const near = CUR.playable.filter(c => c !== t).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid)).slice(0, 10);
-  S.t = t; S.opts = shuffle([t, ...shuffle(near).slice(0, 3)]); S.answered = false;
+  let opts = shuffle(near).slice(0, 3);
+  if (t.area < 3e-5) { // a ringed dot: offer its neighbours and other small units nearby, so size gives nothing away
+    const nbs = near.filter(c => t.neighbors.has(c.name)), small = near.filter(c => c.area < 40 * t.area && !t.neighbors.has(c.name));
+    opts = [...new Set([...shuffle(small).slice(0, 2), ...shuffle(nbs), ...near])].slice(0, 3);
+  }
+  S.t = t; S.opts = shuffle([t, ...opts]); S.answered = false;
   G.fill = c => c === t ? cssVar('--accent') : null;
   const zn = Math.max(CUR.def.homeZoom, zoomForUnit(t) * 0.8);
   flyTo(t.centroid, zn); // no labels before answering; context labels appear with the answer
@@ -1945,7 +2010,7 @@ function nameitRender() {
   panel.innerHTML = `<h2>Name It <span class="muted small">· shape and position</span></h2>
     ${scopeLine()}
     <p class="sub">Which ${esc(CUR.def.unit)} is highlighted? No labels, no neighbours: just shape and position.</p>
-    <div class="hint">Running streak ${st}</div>
+    <div class="hint streak">Running streak ${st}</div>
     <div class="opts" id="nopts">${S.opts.map((c, i) => `<button class="btn" data-i="${i}">${esc(c.name)}</button>`).join('')}</div>
     <div id="nfb" aria-live="polite"></div>
     ${coach(['Distractors are always nearby, so this trains exactly the confusions that cost placement points.',
@@ -1961,7 +2026,8 @@ function nameitAnswer(i) {
   mark(S.t, !correct); save();
   panel.querySelectorAll('#nopts .btn').forEach(b => { const c = S.opts[+b.dataset.i]; if (c === S.t) b.classList.add('ok'); else if (+b.dataset.i === i) b.classList.add('bad'); });
   G.hover = true;
-  G.markers = contextLabels(S.t.centroid, G.zoom, new Set([S.t])).concat(S.opts.filter(c => c !== S.t).map(c => ({ p: c.anchor, label: c.name, textOnly: true })));
+  G.markers = S.opts.filter(c => c !== S.t).map(c => ({ p: c.anchor, label: c.name, textOnly: true })) // options first, so they win any overlap
+    .concat(contextLabels(S.t.centroid, G.zoom, new Set(S.opts)));
   render();
   const nbs = [...S.t.neighbors].sort();
   setTimeout(() => revealFeedback('#nfb'), 50);
@@ -1973,6 +2039,25 @@ function nameitAnswer(i) {
 }
 
 // ----- Flags -----
+// Flags that get confused with each other. Distractors come from the same family when one exists.
+const FLAG_FAMILIES = [
+  ['Sweden', 'Norway', 'Finland', 'Denmark', 'Iceland'],
+  ['Russia', 'Slovakia', 'Slovenia', 'Serbia', 'Croatia', 'Czechia', 'Netherlands', 'Luxembourg', 'Paraguay'],
+  ['Egypt', 'Iraq', 'Syria', 'Yemen', 'Sudan', 'Jordan', 'Palestine', 'United Arab Emirates', 'Kuwait'],
+  ['Ghana', 'Ethiopia', 'Senegal', 'Mali', 'Guinea', 'Cameroon', 'Burkina Faso', 'Guinea-Bissau', 'Bolivia', 'Lithuania'],
+  ['Honduras', 'Nicaragua', 'El Salvador', 'Guatemala', 'Argentina'],
+  ['France', 'Italy', 'Ireland', "Côte d'Ivoire", 'Mexico', 'Belgium', 'Romania', 'Chad', 'Moldova', 'Andorra', 'Nigeria', 'Peru'],
+  ['Indonesia', 'Monaco', 'Poland', 'Austria', 'Latvia'],
+  ['Australia', 'New Zealand', 'Fiji', 'Tuvalu'],
+  ['Colombia', 'Ecuador', 'Venezuela'],
+  ['Turkey', 'Tunisia', 'Algeria', 'Pakistan', 'Malaysia', 'Mauritania', 'Azerbaijan', 'Libya', 'Comoros'],
+  ['Germany', 'Belgium', 'Uganda', 'Angola'],
+  ['Bahrain', 'Qatar'],
+  ['Hungary', 'Bulgaria', 'Tajikistan', 'Italy'],
+  ['Norway', 'Iceland', 'United Kingdom', 'Faroe Islands'],
+  ['Liberia', 'United States', 'Malaysia', 'Puerto Rico', 'Cuba'],
+  ['Japan', 'Bangladesh', 'Palau'],
+];
 function flagsStart() {
   if (!CUR.isWorld) {
     panel.innerHTML = `<h2>Flags</h2><p class="sub">Flags are available on the World level.</p><div class="row"><button class="btn" id="toworld">Switch to World</button></div>`;
@@ -1983,7 +2068,9 @@ function flagsStart() {
   if (cands.length < 4 && CUR.playable.filter(flagCode).length < 4) return noScope();
   const t = pickTarget(cands.length ? cands : CUR.playable.filter(flagCode));
   const near = CUR.playable.filter(c => c !== t && flagCode(c)).sort((p, q) => haversine(p.centroid, t.centroid) - haversine(q.centroid, t.centroid)).slice(0, 12);
-  S.t = t; S.opts = shuffle([t, ...shuffle(near).slice(0, 3)]); S.answered = false;
+  const fam = [...new Set(FLAG_FAMILIES.filter(f => f.includes(t.name)).flat())].filter(n => n !== t.name).map(n => CUR.byName.get(n)).filter(c => c && c.playable && flagCode(c));
+  const famPick = shuffle(fam).slice(0, 2); // up to two lookalikes, the rest neighbours
+  S.t = t; S.opts = shuffle([t, ...[...new Set([...famPick, ...shuffle(near)])].slice(0, 3)]); S.answered = false;
   flagsRender();
 }
 function flagsRender() {
@@ -1991,7 +2078,7 @@ function flagsRender() {
   panel.innerHTML = `<h2>Flags <span class="muted small">· whose flag?</span></h2>
     ${scopeLine()}
     <p class="sub">Name the country. Options are neighbours, so similar regional flags are the test.</p>
-    <div class="hint">Running streak ${st}</div>
+    <div class="hint streak">Running streak ${st}</div>
     <div class="flagstage"><img src="data/flags/${flagCode(S.t)}.svg" alt="Flag to identify"></div>
     <div class="opts" id="fopts">${S.opts.map((c, i) => `<button class="btn" data-i="${i}">${esc(c.name)}</button>`).join('')}</div>
     <div id="ffb" aria-live="polite"></div>
@@ -2055,7 +2142,7 @@ function cluesRender() {
   panel.innerHTML = `<h2>Clues <span class="muted small">· what you'd see on the street</span></h2>
     ${scopeLine()}
     <p class="sub">Which country matches these clues? Options share the driving side and region, so the details decide it.</p>
-    <div class="hint">Running streak ${st}</div>
+    <div class="hint streak">Running streak ${st}</div>
     ${clueRows(S.t, S.shown)}
     <div class="row" style="margin:6px 0 10px">${S.hidden.length ? '<button class="btn sec" id="morec">Reveal another clue</button>' : ''}</div>
     <div class="opts" id="clopts">${S.opts.map((c, i) => `<button class="btn" data-i="${i}">${esc(c.name)}</button>`).join('')}</div>
