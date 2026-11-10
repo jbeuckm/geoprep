@@ -93,7 +93,7 @@ Libraries: d3 7.9 and topojson 3.0.2 from cdnjs. No build step.
 
 ## PWA
 
-`manifest.webmanifest` plus `sw.js` precache the app shell, the two CDN libraries and all map data (about 1.6 MB). `pwa.js` registers the worker, shows a reload toast when a new version is deployed, wires the Install button, and shows a one-time Add-to-Home-Screen hint on iOS. Bump `VERSION` in `sw.js` when shipping changes so clients pick them up.
+`manifest.webmanifest` plus `sw.js` precache the app shell, the two CDN libraries and all map data (about 1.6 MB). `pwa.js` registers the worker, shows a reload toast when a new version is deployed, wires the Install button, and shows a one-time Add-to-Home-Screen hint on iOS. Bump `VERSION` in `sw.js` and `APP_VERSION` in `app.js` together when shipping changes: the worker version makes clients update, and the app version is what Stats shows, so it always names the code actually running.
 
 Deploys: GitHub Pages serves the `main` branch root. Push to `main` and the site updates in a minute or two.
 

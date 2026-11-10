@@ -3,6 +3,7 @@
    Scope: any level can be narrowed to a region; every drill and the study guide respect it. */
 (() => {
 'use strict';
+const APP_VERSION = 'v24'; // keep in step with VERSION in sw.js
 
 // ---------- Names (world level) ----------
 const RENAME = {
@@ -1746,7 +1747,7 @@ function openStats() {
     ${weak.length ? weak.map(r => `<div class="stat"><span>${r.level === 'world' ? flagImg(WORLD.byName.get(r.name)) : ''}${esc(r.name)} <span class="muted small">${r.level === 'world' ? '' : esc(LEVEL_DEFS[r.level].label.split(' · ')[0])}</span></span><b>${r.miss} of ${r.seen} missed</b></div>`).join('') : '<p class="muted small">Nothing yet. Play a few rounds.</p>'}
     <div class="row" style="margin-top:14px"><button class="btn sec" id="reset">Reset all stats</button></div>
     <div class="small muted" id="appver" style="margin-top:10px"></div>`;
-  if (window.caches) caches.keys().then(k => { const v = k.find(x => /^geodrill-v\d+$/.test(x)); const el = document.getElementById('appver'); if (v && el) el.textContent = 'App version ' + v.replace('geodrill-', ''); }).catch(() => {});
+  document.getElementById('appver').textContent = 'App version ' + APP_VERSION;
   document.getElementById('reset').onclick = () => {
     if (!confirm('Erase all progress?')) return;
     STATS = { units: {}, globle: [], tap: [], streaks: {} }; save();
