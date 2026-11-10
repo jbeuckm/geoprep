@@ -74,15 +74,17 @@ Every view has a link, kept in the address bar as you move around (Back and Forw
 
 Mode slugs: `train study explore tap hotcold borders closer nameit flags clues stats`. Level ids: `world usa india china brazil canada australia russia`. Regions are slugified names (`western-europe`, `far-eastern`).
 
-**Share** in the header copies a link to what you are looking at, or opens the phone share sheet. In Tap it shares the round's five questions (planned when the round starts); in Hot & Cold it shares the hidden country; after finishing, your score or guess count rides along and the friend sees it as the score to beat. Answers travel base64-encoded by name, so they are not readable in the URL at a glance (this is not security, just spoiler protection). Old `?level=&region=` links still work.
+**Share** in the header copies a link to what you are looking at, or opens the phone share sheet. In Tap it shares the round's five questions (planned when the round starts); in Hot & Cold it shares the hidden country; after finishing, your score or guess count rides along and the friend sees it as the score to beat. Answers travel by name, scrambled so that neither the URL nor a base64 decoder shows them (this is not security, just spoiler protection). Older plain-base64 links and `?level=&region=` links still work. A damaged link opens a fresh game and says so.
+
+Leaving a Tap round, Hot & Cold game or training set mid-way (Back, another mode, a level change) keeps it: coming back to the same address picks up where you were. Pressing the current mode's button again starts afresh.
 
 ## Data
 
-- `data/countries-50m.json`: Natural Earth 1:50m via world-atlas 2.0.2. Somaliland, Northern Cyprus, Western Sahara and Siachen are folded into Somalia, Cyprus, Morocco and India so the border graph matches Globle's country list. Dependencies are drawn but never used as answers.
+- `data/countries-50m.json`: Natural Earth 1:50m via world-atlas 2.0.2. Somaliland, Northern Cyprus, Western Sahara and Siachen are folded into Somalia, Cyprus, Morocco and India so the border graph matches Globle's country list. Crimea, which Natural Earth draws inside Russia, is moved to Ukraine at load time. Dependencies are drawn but never used as answers.
 - `data/admin1/*.json`: Natural Earth 1:50m admin-1 (Russia from 1:10m, simplified). Crimea and Sevastopol are excluded from the Russia level.
 - `data/places.js`, `data/subcapitals.js`, `data/subcities.js`: hand-entered coordinates.
 - `data/regions.js`: continent, study-region and sub-national region membership.
-- `data/iso.js` + `data/flags/*.svg`: ISO alpha-2 codes and 227 flags vendored from the MIT-licensed flag-icons package (4:3).
+- `data/iso.js` + `data/flags/*.svg`: ISO alpha-2 codes and 227 flags vendored from the MIT-licensed flag-icons package (4:3). Syria's flag is updated to the 2025 green-white-black flag with three red stars.
 - `data/clues.js`: hand-written street-level identification clues for 134 countries and territories with Street View coverage. Shown on study cards and used by the Clues drill.
 
 The world map is simplified to 40% of its vertices at rest and 7% while dragging or animating, so the globe stays smooth.

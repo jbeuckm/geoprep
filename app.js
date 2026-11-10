@@ -142,8 +142,22 @@ function canonicalWorld(raw) { const r = RENAME[raw] || raw; return MERGE[r] || 
 const PARAMS = new URLSearchParams(location.search);
 const SIMP = PARAMS.has('simp') ? +PARAMS.get('simp') : 0.4;   // share of vertices KEPT in the full world map (topojson.quantile keeps the top fraction)
 const PREC = PARAMS.has('prec') ? +PARAMS.get('prec') : 1.0;   // projection resampling precision (larger = fewer samples)
+// Natural Earth draws Crimea inside Russia. Move that polygon to Ukraine, the internationally recognised border,
+// and merge it so no internal line is drawn at the isthmus.
+function fixCrimea(topo) {
+  const geoms = topo.objects.countries.geometries;
+  const ru = geoms.find(g => g.properties && g.properties.name === 'Russia'), ua = geoms.find(g => g.properties && g.properties.name === 'Ukraine');
+  if (!ru || !ua || ru.type !== 'MultiPolygon') return;
+  const k = ru.arcs.findIndex(poly => { const c = d3.geoCentroid(topojson.feature(topo, { type: 'Polygon', arcs: poly })); return c[0] > 32 && c[0] < 37 && c[1] > 44 && c[1] < 46.5; });
+  if (k < 0) return;
+  const crimea = { type: 'Polygon', arcs: ru.arcs[k] };
+  ru.arcs = ru.arcs.filter((_, i) => i !== k);
+  const merged = topojson.mergeArcs(topo, [ua, crimea]);
+  ua.type = merged.type; ua.arcs = merged.arcs;
+}
 function buildLevel(id, topo) {
   const def = LEVEL_DEFS[id], isWorld = id === 'world';
+  if (isWorld) fixCrimea(topo);
   // Two detail levels: full geometry at rest, coarse geometry while dragging or animating.
   // Geometry maths (hit tests, centroids, areas, distances) use the original topology; simplified copies are only drawn.
   const pre = topojson.presimplify(topo);
@@ -250,10 +264,12 @@ function pool() { // playable units in current scope
   const set = new Set(CUR.regions[REGION]);
   return CUR.playable.filter(u => set.has(u.name));
 }
+// Russia sits in the European regions, so its places east of the Urals are left out of a regional scope.
+const PLACE_IN_REGION = { Russia: pl => pl.p[0] < 60 };
 function scopedPlaces(kinds) {
   if (REGION === 'All') return CUR.places.filter(pl => kinds[pl.kind]);
   const inScope = new Set(pool().map(u => u.name));
-  return CUR.places.filter(pl => kinds[pl.kind] && pl.units.some(u => inScope.has(u.name)));
+  return CUR.places.filter(pl => kinds[pl.kind] && pl.units.some(u => inScope.has(u.name) && (!CUR.isWorld || !PLACE_IN_REGION[u.name] || PLACE_IN_REGION[u.name](pl))));
 }
 function findUnit(text) { return CUR.lookup.get(normalize(text)) || null; }
 function editDistance(a, b) {
@@ -344,12 +360,20 @@ function contextLabels(center, zoom, exclude, max = 30) {
     const dc = d3.geoDistance(u.anchor, center);
     if (dc < radius * 0.7) { out.push({ u, p: u.anchor }); continue; }
     if (dc > radius + 1.0) continue; // too far for any vertex to be in view
-    // Big neighbour whose centre is off-screen: label it just inside its nearest visible edge (pixel inset applied at draw time).
-    let best = null, bd = radius * 0.95;
-    for (const v of (u.labelVerts || u.vertices)) { const d = d3.geoDistance(v, center); if (d < bd) { bd = d; best = v; } }
-    if (best) out.push({ u, p: best, edge: true });
+    // Big neighbour whose centre is off-screen: label the middle of the part in view, checked to be inside the unit,
+    // so the name never lands on a neighbour or out at sea.
+    const seen = (u.labelVerts || u.vertices).filter(v => d3.geoDistance(v, center) < radius * 0.85);
+    if (seen.length < 3) continue;
+    const mid = d3.geoCentroid({ type: 'MultiPoint', coordinates: seen });
+    let p = contains(u, mid) ? mid : null;
+    if (!p) { // walk from the visible border point nearest the middle toward the middle until inside
+      let near = seen[0], nd = Infinity; for (const v of seen) { const d = d3.geoDistance(v, mid); if (d < nd) { nd = d; near = v; } }
+      const step = d3.geoInterpolate(near, mid);
+      for (const f of [0.15, 0.3, 0.5, 0.7]) { const q = step(f); if (contains(u, q)) { p = q; break; } }
+    }
+    if (p && d3.geoDistance(p, center) < radius * 0.9) out.push({ u, p });
   }
-  return out.sort((a, b) => b.u.area - a.u.area).slice(0, max).map(x => ({ p: x.p, label: x.u.name, textOnly: true, edge: !!x.edge }));
+  return out.sort((a, b) => b.u.area - a.u.area).slice(0, max).map(x => ({ p: x.p, label: x.u.name, textOnly: true }));
 }
 // Zoom to frame one unit: by area, but widened for scattered archipelagos and capped for tiny units so nearby land gives context.
 function zoomForUnit(u) {
@@ -463,10 +487,7 @@ function render() {
     const [x, y] = G.projection(m.p);
     if (m.textOnly) { // quiet context label, centred on the point, dropped if it would collide
       ctx.font = '500 11px system-ui, sans-serif'; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
-      let lx = x, ly = y;
-      if (m.edge) { // nudge an edge label a fixed 16px toward the view centre so it sits inside its own country
-        const dx = G.w / 2 - x, dy = G.h / 2 - y, L = Math.hypot(dx, dy) || 1; lx = x + dx / L * 16; ly = y + dy / L * 16;
-      }
+      const lx = x, ly = y;
       const tw = ctx.measureText(m.label).width, w = tw + 6, h = 15, r = { x: lx - w / 2, y: ly - h / 2, w, h };
       if (!hits(r)) { placed.push(r); ctx.fillStyle = cssVar('--panel-faint'); ctx.fillRect(r.x, r.y, w, h); ctx.fillStyle = cssVar('--muted'); ctx.fillText(m.label, lx, ly); }
       ctx.textAlign = 'start'; continue;
@@ -481,7 +502,8 @@ function render() {
       ctx.font = '600 12px system-ui, sans-serif'; ctx.textBaseline = 'middle';
       const tw = ctx.measureText(m.label).width, w = tw + 8, h = 18;
       const candidates = [{ x: x + 9, y: y - 9 }, { x: x - 9 - w, y: y - 9 }, { x: x - w / 2, y: y + 10 }, { x: x - w / 2, y: y - 10 - h }];
-      let r = candidates.find(c => !hits({ x: c.x, y: c.y, w, h })) || candidates[0];
+      const fits = c => c.x >= 2 && c.y >= 2 && c.x + w <= G.w - 2 && c.y + h <= G.h - 2;
+      let r = candidates.find(c => fits(c) && !hits({ x: c.x, y: c.y, w, h })) || candidates.find(fits) || candidates[0];
       r = { x: r.x, y: r.y, w, h }; placed.push(r);
       ctx.fillStyle = cssVar('--panel'); ctx.fillRect(r.x, r.y, w, h);
       ctx.fillStyle = cssVar('--text'); ctx.fillText(m.label, r.x + 4, r.y + h / 2);
@@ -514,22 +536,28 @@ const SLUG_MODE = Object.fromEntries(Object.entries(MODE_SLUG).map(([k, v]) => [
 const slugify = t => normalize(t).replace(/ /g, '-');
 let ROUTE = {};        // params from the link being opened, consumed by the mode that starts
 let ROUTING = false;   // true while applying a link, so the address bar keeps its parameters
-const b64e = t => btoa(String.fromCharCode(...new TextEncoder().encode(t))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-const b64d = t => new TextDecoder().decode(Uint8Array.from(atob(t.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0)));
-// Answers travel by name (stable across browsers), base64-encoded so they are not readable at a glance.
-function encodePlan(plan) { return b64e(plan.map(q => q.kind === 'unit' ? 'u:' + q.c.name : 'p:' + q.pl.name).join('\n')); }
+const b64raw = t => atob(t.replace(/-/g, '+').replace(/_/g, '/'));
+const KEY = [103, 101, 111, 100, 114, 105, 108, 108];
+// Answers travel by name (stable across browsers), scrambled so a base64 decoder does not reveal them. Not security, just
+// spoiler protection. New codes start with '.', which base64 never uses; older plain-base64 links still open.
+function enc(t) { const b = new TextEncoder().encode(t).map((x, i) => x ^ KEY[i % KEY.length]); return '.' + btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+function dec(code) {
+  if (code.startsWith('.')) return new TextDecoder().decode(Uint8Array.from(b64raw(code.slice(1)), (c, i) => c.charCodeAt(0) ^ KEY[i % KEY.length]));
+  return new TextDecoder().decode(Uint8Array.from(b64raw(code), c => c.charCodeAt(0)));
+}
+function encodePlan(plan) { return enc(plan.map(q => q.kind === 'unit' ? 'u:' + q.c.name : 'p:' + q.pl.name).join('\n')); }
 function decodePlan(code) {
   try {
-    const plan = b64d(code).split('\n').map(tok => {
+    const plan = dec(code).split('\n').map(tok => {
       const name = tok.slice(2);
       if (tok.startsWith('u:')) { const c = CUR.byName.get(name); return c ? { kind: 'unit', c } : null; }
       const pl = CUR.places.find(x => x.name === name); return pl ? { kind: 'place', pl } : null;
     });
-    return plan.length && plan.every(Boolean) ? plan.slice(0, 5) : null;
+    return plan.length === 5 && plan.every(Boolean) ? plan : null;
   } catch (e) { return null; }
 }
-function encodeUnit(u) { return b64e(u.name); }
-function decodeUnit(code) { try { return CUR.byName.get(b64d(code)) || null; } catch (e) { return null; } }
+function encodeUnit(u) { return enc(u.name); }
+function decodeUnit(code) { try { return CUR.byName.get(dec(code)) || null; } catch (e) { return null; } }
 function routePath() {
   if (TRAIN.active) return `/train/${TRAIN.program}`;
   if (mode === 'train') return '/train';
@@ -545,17 +573,21 @@ function syncHash() { // a new view gets a new history entry, without game param
 function cleanHash() { if (!ROUTING && CUR) history.replaceState(null, '', '#' + routePath()); }
 function focusHash(u) { if (!ROUTING && CUR && !TRAIN.active) history.replaceState(null, '', '#' + routePath() + '?u=' + slugify(u.name)); }
 async function applyRoute(hash) {
-  const raw = (hash || '').replace(/^#/, '');
+  let raw = (hash || '').replace(/^#/, '');
+  try { raw = decodeURIComponent(raw); } catch (e) {}
   if (!raw.startsWith('/')) return false;
-  const [path, query] = raw.split('?');
-  const seg = path.split('/').filter(Boolean), qp = new URLSearchParams(query || '');
+  const qi = raw.indexOf('?'), path = (qi < 0 ? raw : raw.slice(0, qi)).toLowerCase(), query = qi < 0 ? '' : raw.slice(qi + 1);
+  const seg = path.split('/').filter(Boolean), qp = new URLSearchParams(query);
   const m = SLUG_MODE[seg[0]]; if (!m) return false;
+  stashView();
   ROUTING = true;
   try {
     trainStop(true);
     if (m === 'train') {
-      if (seg[1] && PROGRAMS[seg[1]]) { ROUTING = false; trainChoose(seg[1]); }
-      else await setLevel(CUR.id, REGION, 'train');
+      if (seg[1] && PROGRAMS[seg[1]]) {
+        ROUTING = false;
+        trainChoose(seg[1]);
+      } else await setLevel(CUR.id, REGION, 'train');
       return true;
     }
     const lv = LEVEL_DEFS[seg[1]] ? seg[1] : 'world';
@@ -566,13 +598,59 @@ async function applyRoute(hash) {
     const u = qp.get('u') && L.units.find(x => slugify(x.name) === qp.get('u'));
     if (u && S.focus) S.focus(u);
     return true;
-  } finally { ROUTING = false; ROUTE = {}; }
+  } finally {
+    ROUTING = false; ROUTE = {};
+    // Show the address of what actually opened: unknown levels, regions or programmes fall back, and the bar says so.
+    const keep = new URLSearchParams(); const qp = new URLSearchParams(location.hash.split('?')[1] || '');
+    for (const k of ['q', 's', 't', 'g', 'u']) if (qp.get(k)) keep.set(k, qp.get(k));
+    const want = '#' + routePath() + (keep.toString() && mode !== 'train' ? '?' + keep : '');
+    if (CUR && location.hash !== want) history.replaceState(null, '', want);
+  }
 }
-window.addEventListener('popstate', () => {
+window.addEventListener('popstate', async () => {
   const [path, query] = location.hash.replace(/^#/, '').split('?');
   if (path === routePath() && !query) return; // already showing this view
-  applyRoute(location.hash);
+  if (!(await applyRoute(location.hash)) && CUR) history.replaceState(null, '', '#' + routePath()); // unknown address: keep the current view and its address
 });
+// ---------- Leaving and coming back ----------
+// A Tap round, Hot & Cold game or training set in progress is kept when you leave it (Back, a mode button, a level
+// change), and picks up where it was when you return to the same address.
+const SNAP = new Map(); let stashedS = null;
+function inProgress(allowTrain) {
+  if (TRAIN.active) return allowTrain;
+  if (mode === 'tap') return !!(S.plan && !S.roundDone);
+  if (mode === 'globle') return !!(S.target && !S.done);
+  return false;
+}
+function stashView(allowTrain = false) {
+  if (!CUR || !mode || S === stashedS || !inProgress(allowTrain)) return;
+  const frag = document.createDocumentFragment(); while (panel.firstChild) frag.appendChild(panel.firstChild);
+  SNAP.set(routePath(), { mode, S, frag, train: TRAIN.active ? { ...TRAIN } : null, level: CUR.id, region: REGION,
+    G: { fill: G.fill, stroke: G.stroke, markers: G.markers, lines: G.lines, onTap: G.onTap, hover: G.hover, rotate: G.rotate.slice(), zoom: G.zoom, tap: canvas.classList.contains('tap') } });
+  stashedS = S;
+  if (SNAP.size > 8) SNAP.delete(SNAP.keys().next().value);
+}
+// A shared link only resumes a stashed game if it is the same game.
+function snapMatchesRoute(s) {
+  if (ROUTE.q) return !!(s.S.plan && encodePlan(s.S.plan) === ROUTE.q);
+  if (ROUTE.t) return !!(s.S.target && encodeUnit(s.S.target) === ROUTE.t);
+  return true;
+}
+function restoreView(key) {
+  const s = SNAP.get(key); if (!s || !LEVELS[s.level] || !snapMatchesRoute(s)) return false;
+  SNAP.delete(key);
+  if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
+  if (G.anim) { G.anim.stop(); G.anim = null; }
+  if (CUR !== LEVELS[s.level] || REGION !== s.region) { CUR = LEVELS[s.level]; REGION = s.region; levelSel.value = CUR.id; fillRegionSelect(); distCache.clear(); }
+  mode = s.mode; S = s.S; stashedS = null;
+  if (s.train) Object.assign(TRAIN, s.train);
+  Object.assign(G, { fill: s.G.fill, stroke: s.G.stroke, markers: s.G.markers, lines: s.G.lines, onTap: s.G.onTap, hover: s.G.hover, rotate: s.G.rotate, zoom: s.G.zoom, hoverName: null });
+  canvas.classList.toggle('tap', s.G.tap); tip.style.display = 'none';
+  panel.replaceChildren(s.frag);
+  [...nav.children].forEach(b => b.classList.toggle('on', b.dataset.id === mode));
+  updateLabelButton(); trainBar(); syncHash(); render();
+  return true;
+}
 function toast(text) {
   const t = document.createElement('div'); t.className = 'toast'; t.textContent = text;
   document.body.appendChild(t); setTimeout(() => t.remove(), 2600);
@@ -582,7 +660,9 @@ async function shareLink() {
   let text = `GeoDrill · ${(MODES.find(x => x[0] === mode) || ['', 'Train'])[1]} · ${scopeLabel()}`;
   if (mode === 'tap' && S.plan && !TRAIN.active) {
     params.set('q', encodePlan(S.plan));
-    if (S.roundDone) { params.set('s', String(S.total)); text = `I scored ${S.total}/500 on a GeoDrill placement round (${scopeLabel()}). Can you beat it?`; }
+    const finished = S.roundDone || (S.round && S.round.length >= S.n && S.answered);
+    const tot = S.round ? S.round.reduce((a, r) => a + r.score, 0) : 0;
+    if (finished) { params.set('s', String(tot)); text = `I scored ${tot}/500 on a GeoDrill placement round (${scopeLabel()}). Can you beat it?`; }
     else text = `Try this GeoDrill placement round (${scopeLabel()}): same five places for both of us.`;
   } else if (mode === 'globle' && S.target && !TRAIN.active) {
     params.set('t', encodeUnit(S.target));
@@ -609,44 +689,55 @@ function byAreaDesc(units) { return units.__sorted || (units.__sorted = units.sl
 function drawLearningLabels(center, placed, hits) {
   const vis = p => d3.geoDistance(p, center) < Math.PI / 2 - 0.06;
   const drawn = new Set(G.markers.filter(m => m.label).map(m => m.label));
-  const put = (text, x, y, font, color, bg) => {
-    ctx.font = font; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
-    const w = ctx.measureText(text).width + 6, h = 15, r = { x: x - w / 2, y: y - h / 2, w, h };
-    if (x < 0 || y < 0 || x > G.w || y > G.h || hits(r)) { ctx.textAlign = 'start'; return false; }
-    placed.push(r); ctx.fillStyle = bg; ctx.fillRect(r.x, r.y, w, h); ctx.fillStyle = color; ctx.fillText(text, x, y); ctx.textAlign = 'start'; return true;
-  };
+  const onScreen = r => r.x >= 0 && r.y >= 0 && r.x + r.w <= G.w && r.y + r.h <= G.h;
   const strong = cssVar('--text'), muted = cssVar('--muted'), bg = cssVar('--panel-faint');
-  // Priority: capitals, then unit names, then other cities and landmarks, so region names never lose to minor towns.
+  const over = (a, q) => a.x < q.x + q.w && q.x < a.x + a.w && a.y < q.y + q.h && q.y < a.y + a.h;
+  // With capitals showing, unit names keep clear of every capital's dot so capitals are never hidden.
+  const capDots = LABELS.level >= 2 ? CUR.places.filter(pl => pl.kind === 'capital' && vis(pl.p)).map(pl => { const [cx, cy] = G.projection(pl.p); return { x: cx - 5, y: cy - 5, w: 10, h: 10 }; }) : [];
+  // A unit name goes on its main landmass; if that spot is taken it may shift up or down, as long as it stays inside the unit.
+  const putUnit = (u, font, color) => {
+    const [x, y] = G.projection(u.anchor);
+    ctx.font = font; const w = ctx.measureText(u.name).width + 6, h = 15;
+    for (const [dx, dy] of [[0, 0], [0, -13], [0, 13], [-w / 3, 0], [w / 3, 0], [0, -25], [0, 25], [-w / 3, -13], [w / 3, 13], [-w / 3, 13], [w / 3, -13]]) {
+      const r = { x: x + dx - w / 2, y: y + dy - h / 2, w, h };
+      if (!onScreen(r) || hits(r) || capDots.some(q => over(r, q))) continue;
+      if (dx || dy) { const q = invert(x + dx, y + dy); if (!q || !contains(u, q)) continue; }
+      placed.push(r); ctx.fillStyle = bg; ctx.fillRect(r.x, r.y, w, h);
+      ctx.fillStyle = color; ctx.textBaseline = 'middle'; ctx.textAlign = 'center'; ctx.fillText(u.name, x + dx, y + dy); ctx.textAlign = 'start';
+      return true;
+    }
+    return false;
+  };
+  // A place gets a dot and a label to its right, left, above or below, whichever is free.
   const drawPlaces = kinds => {
     for (const pl of CUR.places) {
-      if (!kinds.includes(pl.kind)) continue;
-      if (!vis(pl.p)) continue;
+      if (!kinds.includes(pl.kind) || !vis(pl.p)) continue;
       const [x, y] = G.projection(pl.p);
       if (x < 0 || y < 0 || x > G.w || y > G.h) continue;
+      const dot = { x: x - 4, y: y - 4, w: 8, h: 8 };
+      if (hits(dot)) continue;
       const font = pl.kind === 'capital' ? '600 11px system-ui, sans-serif' : '500 10.5px system-ui, sans-serif';
-      ctx.font = font; const w = ctx.measureText(pl.name).width + 6;
-      const r = { x: x + 5, y: y - 7.5, w, h: 15 };
-      if (hits(r) || hits({ x: x - 4, y: y - 4, w: 8, h: 8 })) continue;
-      placed.push(r, { x: x - 4, y: y - 4, w: 8, h: 8 });
+      ctx.font = font; const w = ctx.measureText(pl.name).width + 6, h = 15;
+      const r = [{ x: x + 5, y: y - 7.5 }, { x: x - 5 - w, y: y - 7.5 }, { x: x - w / 2, y: y - 6 - h }, { x: x - w / 2, y: y + 6 }]
+        .map(c => ({ ...c, w, h })).find(c => onScreen(c) && !hits(c));
+      if (!r) continue;
+      placed.push(r, dot);
       ctx.beginPath(); ctx.arc(x, y, pl.kind === 'capital' ? 3.5 : 2.5, 0, 2 * Math.PI);
       ctx.fillStyle = pl.kind === 'capital' ? cssVar('--bad') : pl.kind === 'landmark' ? cssVar('--warn') : strong; ctx.fill();
-      ctx.fillStyle = bg; ctx.fillRect(r.x, r.y, w, 15); ctx.fillStyle = pl.kind === 'capital' ? strong : muted;
-      ctx.textBaseline = 'middle'; ctx.fillText(pl.name, r.x + 3, y);
+      ctx.fillStyle = bg; ctx.fillRect(r.x, r.y, w, h); ctx.fillStyle = pl.kind === 'capital' ? strong : muted;
+      ctx.textBaseline = 'middle'; ctx.fillText(pl.name, r.x + 3, r.y + h / 2);
     }
   };
-  if (LABELS.level >= 2) drawPlaces(['capital']);
-  // Unit names, largest first: small units appear as you zoom in and there is room.
+  // Priority: unit names (largest first, so small ones appear as you zoom in), then capitals, then other cities and landmarks.
   for (const u of byAreaDesc(CUR.units)) {
     if (drawn.has(u.name) || !vis(u.anchor)) continue;
-    const [x, y] = G.projection(u.anchor);
-    put(u.name, x, y, '600 11.5px system-ui, sans-serif', strong, bg);
+    putUnit(u, '600 11.5px system-ui, sans-serif', strong);
   }
-  if (LABELS.level >= 2) drawPlaces(['city', 'landmark']);
+  if (LABELS.level >= 2) { drawPlaces(['capital']); drawPlaces(['city', 'landmark']); }
   // On a sub-national level, also name the surrounding countries in a quieter style.
   if (!CUR.isWorld) for (const u of byAreaDesc(WORLD.units)) {
     if (u.name === CUR.def.parent || drawn.has(u.name) || !vis(u.anchor)) continue;
-    const [x, y] = G.projection(u.anchor);
-    put(u.name, x, y, '500 10.5px system-ui, sans-serif', muted, bg);
+    putUnit(u, '500 10.5px system-ui, sans-serif', muted);
   }
 }
 function updateLabelButton() {
@@ -655,7 +746,8 @@ function updateLabelButton() {
   b.classList.toggle('on', LABELS.level > 0);
   b.textContent = LABELS.level === 2 ? 'Aa•' : 'Aa';
   const next = LABELS.level === 0 ? 'Show names' : LABELS.level === 1 ? 'Show names, capitals and cities' : 'Hide labels';
-  b.title = next; b.setAttribute('aria-label', next); b.setAttribute('aria-pressed', LABELS.level > 0 ? 'true' : 'false');
+  const now = LABELS.level === 0 ? 'off' : LABELS.level === 1 ? 'names' : 'names, capitals and cities';
+  b.title = next; b.setAttribute('aria-label', `Map labels: ${now}. Press to ${next.toLowerCase()}.`); b.removeAttribute('aria-pressed');
 }
 document.getElementById('lbl').onclick = () => {
   LABELS.level = (LABELS.level + 1) % 3;
@@ -691,7 +783,8 @@ canvas.addEventListener('pointermove', e => {
   }
   if (down) {
     const dx = e.clientX - down.x, dy = e.clientY - down.y;
-    if (Math.hypot(dx, dy) > 4) moved = true;
+    if (!moved && Math.hypot(dx, dy) <= (e.pointerType === 'mouse' ? 4 : 10)) return; // a tap that wobbles a little stays a tap
+    moved = true;
     const k = 90 / (G.base * G.zoom);
     G.rotate = [down.r[0] + dx * k, Math.max(-90, Math.min(90, down.r[1] - dy * k))];
     renderCoarse(); tip.style.display = 'none';
@@ -760,6 +853,7 @@ async function loadLevel(id) {
   return LEVELS[id];
 }
 async function setLevel(id, region = 'All', modeId = null) {
+  stashView();
   document.getElementById('loading').style.display = 'flex';
   CUR = await loadLevel(id); REGION = region;
   document.getElementById('loading').style.display = 'none';
@@ -767,12 +861,12 @@ async function setLevel(id, region = 'All', modeId = null) {
   distCache.clear();
   const next = modeId || mode || 'study';
   if (next === 'stats') return openStats(); // stats is a view, not a mode: re-open it for the new level
+  flyHome(); // modes that frame their own target (Name It, Borders) fly after this and win
   setMode(next);
-  flyHome();
 }
 // Picking a level or region by hand from the Train screen means "let me study this": open the study guide.
-levelSel.onchange = () => { trainStop(true); setLevel(levelSel.value, 'All', mode === 'train' ? 'study' : null); };
-regionSel.onchange = () => { trainStop(true); REGION = regionSel.value; if (mode === 'stats') return openStats(); setMode(mode === 'train' ? 'study' : mode); flyHome(); };
+levelSel.onchange = () => { stashView(); trainStop(true); setLevel(levelSel.value, 'All', mode === 'train' ? 'study' : null); };
+regionSel.onchange = () => { stashView(); trainStop(true); REGION = regionSel.value; if (mode === 'stats') return openStats(); flyHome(); setMode(mode === 'train' ? 'study' : mode); };
 function scopeLabel() { return (REGION === 'All' ? CUR.def.label.split(' · ')[0] : REGION); }
 
 // ---------- Modes ----------
@@ -780,12 +874,15 @@ const panel = document.getElementById('panel');
 const MODES = [['train', 'Train'], ['study', 'Study'], ['explore', 'Explore'], ['tap', 'Tap'], ['globle', 'Hot & Cold'], ['neighbors', 'Borders'], ['closer', 'Closer'], ['nameit', 'Name It'], ['flags', 'Flags'], ['clues', 'Clues']];
 let mode = null, S = {}, tourTimer = null;
 const nav = document.getElementById('nav');
-MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => { if (id !== 'train') trainStop(true); setMode(id); }; nav.appendChild(b); });
-function setMode(id) {
+MODES.forEach(([id, label]) => { const b = document.createElement('button'); b.textContent = label; b.dataset.id = id; b.onclick = () => { const again = id === mode && !TRAIN.active; stashView(); if (id !== 'train') trainStop(true); setMode(id, again); }; nav.appendChild(b); });
+function setMode(id, fresh = false) {
+  if (!fresh) stashView();
+  if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   mode = id; S = {};
+  if (fresh) SNAP.delete(routePath());
+  else if (!TRAIN.active && SNAP.has(routePath()) && restoreView(routePath())) return 'restored';
   updateLabelButton();
   syncHash();
-  if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   [...nav.children].forEach(b => b.classList.toggle('on', b.dataset.id === id));
   resetGlobe(); render();
   const fn = { train: trainLanding, study: studyStart, explore, tap: tapStart, globle: globleStart, neighbors: neighborsStart, closer: closerStart, nameit: nameitStart, flags: flagsStart, clues: cluesStart }[id];
@@ -805,6 +902,9 @@ document.addEventListener('keydown', e => {
     if (nx) { e.preventDefault(); nx.click(); }
   }
 });
+document.addEventListener('click', e => {
+  if (e.detail > 1 && e.target.closest && e.target.closest('#panel button, #trainbar button')) { e.stopImmediatePropagation(); e.preventDefault(); }
+}, true);
 function focusNext() {
   setTimeout(() => { const nx = document.querySelector('#nnext, #fnext, #clnext, #cnext, #nbnext, #tapnext, #gnew'); if (nx) nx.focus({ preventScroll: true }); }, 0);
 }
@@ -892,12 +992,14 @@ function trainLanding() {
   panel.querySelectorAll('.bigopts button').forEach(b => b.onclick = () => trainChoose(b.dataset.p));
 }
 function trainChoose(program) {
+  if (restoreView('/train/' + program)) return; // a set left mid-way picks up where it was
   TRAIN.active = true; TRAIN.program = program; TRAIN.sets = 0; TRAIN.lastTopic = null; TRAIN.lastMode = null; TRAIN.reviewed = false;
   try { localStorage.setItem('geodrill.program', program); } catch (e) {}
   trainNextSet();
 }
 function trainStop(silent) {
   if (!TRAIN.active) return;
+  if (silent) stashView(true);
   TRAIN.active = false; TRAIN.phase = 'run'; trainBar();
   if (!silent) setMode('train');
 }
@@ -1001,14 +1103,27 @@ function studyStart() {
 function explore() {
   G.hover = true;
   panel.innerHTML = `<h2>Explore</h2><p class="sub">Hover to identify, click a ${esc(CUR.def.unit)} to see its borders and capital. Type a name to fly there.</p>
-    <input type="text" id="exq" placeholder="Fly to…" list="clist" autocomplete="off">
+    <form id="exform"><input type="text" id="exq" placeholder="Fly to…" list="clist" autocomplete="off" aria-label="Fly to a ${esc(CUR.def.unit)}"></form>
+    <div class="hint" id="exmsg" aria-live="polite"></div>
     <datalist id="clist">${CUR.playable.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>
     <div id="exinfo"></div>
-    ${coach(['Learn clusters, not single countries: the Sahel strip, the Stans, the Balkans, the Gulf, Central America, the Guianas.',
+    ${coach(CUR.isWorld ? ['Learn clusters, not single countries: the Sahel strip, the Stans, the Balkans, the Gulf, Central America, the Guianas.',
       'For each country, know at least one neighbour in each direction. Hot-and-cold games are solved by walking borders.',
-      'Note where a country is <i>not</i>: Mongolia touches only Russia and China. Portugal touches only Spain.'])}`;
+      'Note where a country is <i>not</i>: Mongolia touches only Russia and China. Portugal touches only Spain.']
+    : [`Learn the ${esc(CUR.def.units)} in clusters by region, then know at least one neighbour in each direction.`,
+      'Hover along a border to see which units meet there. Hot-and-cold games are solved by walking borders.'])}`;
   const q = document.getElementById('exq');
-  q.addEventListener('change', () => { const c = resolveUnit(q.value).unit; if (c) showUnit(c); });
+  const go = text => {
+    const msg = document.getElementById('exmsg');
+    if (!normalize(text)) { msg.textContent = ''; return; }
+    const { unit: c, suggestions } = resolveUnit(text);
+    if (c) { msg.textContent = ''; q.value = ''; return showUnit(c); }
+    msg.innerHTML = suggestions.length ? `Did you mean ${suggestions.map(u => `<button type="button" class="linkbtn" data-n="${esc(u.name)}">${esc(u.name)}</button>`).join(', ')}?`
+      : `No ${esc(CUR.def.unit)} called "${esc(text)}" on this level.`;
+    msg.querySelectorAll('.linkbtn').forEach(b => b.onclick = () => go(b.dataset.n));
+  };
+  document.getElementById('exform').onsubmit = e => { e.preventDefault(); go(q.value); };
+  q.addEventListener('change', () => { if (CUR.lookup.has(normalize(q.value))) go(q.value); }); // picked from the list
   G.onTap = p => { const c = unitAt(p); if (c) showUnit(c); };
   S.focus = showUnit;
   function showUnit(c) {
@@ -1035,6 +1150,7 @@ function tapStart() {
   if (!pool().length) return noScope();
   // A shared link carries the exact five questions; otherwise plan a fresh round now, so it can be shared at any point.
   S.plan = ROUTE.q ? decodePlan(ROUTE.q) : null;
+  if (ROUTE.q && !S.plan) toast("That shared round's link is damaged, so this is a new round.");
   S.shared = S.plan ? { score: ROUTE.s != null && /^\d+$/.test(ROUTE.s) ? Math.min(500, +ROUTE.s) : null } : null;
   if (!S.plan) S.plan = planTapRound();
   tapNext();
@@ -1085,14 +1201,14 @@ function tapRender() {
   panel.innerHTML = `<h2>Tap <span class="muted small">· placement drill</span></h2>
     ${scopeLine()}
     ${S.shared ? `<div class="sharedbar">🔗 Shared round: the same five questions your friend got${S.shared.score != null ? `. Their score: <b>${S.shared.score}/500</b>` : ''}.</div>` : ''}
-    <div class="row small muted"><span>Question ${idx} / ${S.n}</span><span>·</span><span>Round score ${total}</span></div>
-    <div class="scorebar"><i style="width:${total / S.n}%"></i></div>
+    <div class="row small muted"><span>Question ${idx} / ${S.n}</span><span>·</span><span id="tapscore">Round score ${total}</span></div>
+    <div class="scorebar"><i id="tapbar" style="width:${total / S.n}%"></i></div>
     <div class="prompt">${q.kind === 'unit' ? flagImg(q.c, 'flag big') : ''}${esc(label)}</div>
     <div class="hint">${esc(kindTxt)}${q.kind === 'place' ? ` · <a href="#" id="revealc">show ${esc(CUR.def.unit)}</a>` : ''}</div>
     <p class="sub">Rotate and zoom the globe, then tap where it is. Inside the border = 100; otherwise points fall off with distance.</p>
-    <div id="tapfb"></div>
+    <div id="tapfb" aria-live="polite"></div>
     <div class="row" style="margin-top:8px">
-      <label class="cb"><input type="checkbox" data-cat="unit" ${S.cats.unit ? 'checked' : ''}> ${esc(CUR.def.units)}</label>
+      <label class="cb"><input type="checkbox" data-cat="unit" ${S.cats.unit ? 'checked' : ''}> ${esc(CUR.def.units[0].toUpperCase() + CUR.def.units.slice(1))}</label>
       <label class="cb"><input type="checkbox" data-cat="capital" ${S.cats.capital ? 'checked' : ''}> Capitals</label>
       ${CUR.places.some(pl => pl.kind === 'city') ? `<label class="cb"><input type="checkbox" data-cat="city" ${S.cats.city ? 'checked' : ''}> Cities</label>` : ''}
       ${CUR.places.some(pl => pl.kind === 'landmark') ? `<label class="cb"><input type="checkbox" data-cat="landmark" ${S.cats.landmark ? 'checked' : ''}> Landmarks</label>` : ''}
@@ -1123,6 +1239,8 @@ function tapAnswer(p) {
   const score = tapScore(d);
   if (statUnit) mark(statUnit, score < 60);
   S.round.push({ q, score, d, p, target, inside });
+  { const tot = S.round.reduce((a, r) => a + r.score, 0); const ts = document.getElementById('tapscore'), tb = document.getElementById('tapbar');
+    if (ts) ts.textContent = 'Round score ' + tot; if (tb) tb.style.width = (tot / S.n) + '%'; }
   const okc = cssVar('--ok'), badc = cssVar('--bad');
   if (q.kind === 'unit') G.fill = x => x === q.c ? okc : null;
   // Your tap is always marked exactly where it landed. A hit is green; the answer gets a name label, not a second dot.
@@ -1154,7 +1272,7 @@ function tapAnswer(p) {
   setTimeout(() => revealFeedback('#tapfb'), 50);
   const msg = inside ? (q.kind === 'unit' ? 'Inside the border. Full marks.' : 'Dead on.') : `You were <b>${fmtKm(d)}</b> off${q.kind === 'unit' ? ' from the border' : ''}.`;
   const done = S.round.length >= S.n;
-  document.getElementById('tapfb').innerHTML = `<div class="card ${cls}"><div class="big">${score} pts</div><div>${msg}</div>
+  document.getElementById('tapfb').innerHTML = `<div class="card ${cls}"><div class="big">${score} ${score === 1 ? 'pt' : 'pts'}</div><div>${msg}</div>
     ${q.kind === 'place' ? `<div class="small muted">${esc(q.pl.name)} is in ${esc(q.pl.where)}.</div>` : ''}
     <div style="margin-top:8px"><button class="btn" id="tapnext">${done ? 'See round summary' : 'Next'}</button></div></div>`;
   document.getElementById('tapnext').onclick = () => done ? tapSummary() : tapNext();
@@ -1186,7 +1304,8 @@ function globleStart() {
   if (!pool().length) return noScope();
   const sharedTarget = ROUTE.t ? decodeUnit(ROUTE.t) : null;
   S.target = sharedTarget && sharedTarget.playable ? sharedTarget : pickTarget(pool());
-  S.shared = sharedTarget ? { guesses: ROUTE.g && /^\d+$/.test(ROUTE.g) ? +ROUTE.g : null } : null;
+  S.shared = sharedTarget ? { guesses: ROUTE.g && /^\d+$/.test(ROUTE.g) && +ROUTE.g >= 1 && +ROUTE.g <= CUR.playable.length ? +ROUTE.g : null } : null;
+  if (ROUTE.t && !(sharedTarget && sharedTarget.playable)) toast("That shared game's link is damaged, so this is a new hidden " + CUR.def.unit + '.');
   S.guesses = []; S.done = false; S.won = false; S.hintsUsed = 0;
   const nb = S.target.neighbors.size;
   S.hints = [
@@ -1207,9 +1326,9 @@ function globleRender() {
     <p class="sub">A mystery ${esc(CUR.def.unit)} from the scope is hidden. Guess any ${esc(CUR.def.unit)}: the warmer the colour, the closer it is. Bordering ones show darkest red.</p>
     ${S.done ? '' : `<form id="gform"><input type="text" id="gq" placeholder="Type a ${esc(CUR.def.unit)} and press Enter" list="glist" autocomplete="off"></form>
     <datalist id="glist">${CUR.playable.map(c => `<option value="${esc(c.name)}">`).join('')}</datalist>
-    <div class="hint" id="gmsg"></div><div class="small" id="ghints"></div>`}
+    <div class="hint" id="gmsg" aria-live="polite"></div><div class="small" id="ghints"></div>`}
     <div class="row small muted" style="margin-top:6px"><span>Guesses: <b>${S.guesses.length}</b></span><span>·</span><span>Games: ${games.length}</span><span>·</span><span>Avg guesses: ${avg}</span></div>
-    <div id="gres"></div>
+    <div id="gres" aria-live="polite"></div>
     <ul class="glist">${sorted.map(g => `<li><span class="sw" style="background:${g.c === S.target ? cssVar('--ok') : globleColor(g.d)}"></span>${flagImg(g.c)}${esc(g.c.name)}<span class="d">${g.c === S.target ? 'found' : g.d === 0 ? 'borders it' : fmtKm(g.d)}</span></li>`).join('')}</ul>
     <div class="row">${S.done ? '<button class="btn" id="gnew">New game</button>' : `<button class="btn sec" id="ghint" ${S.hintsUsed >= S.hints.length ? 'disabled' : ''}>Hint (${S.hints.length - S.hintsUsed} left)</button> <button class="btn sec" id="ggive">Give up</button>`}</div>
     ${coach(['Open with one guess per continent, spread out: e.g. Mexico, Germany, Egypt, India, Australia. Three or four openers anchor the search.',
@@ -1229,8 +1348,9 @@ function globleRender() {
   render();
 }
 function globleGuess(text) {
-  const { unit: c, suggestions } = resolveUnit(text);
   const msg = document.getElementById('gmsg');
+  if (!normalize(text)) { msg.textContent = ''; return; }
+  const { unit: c, suggestions } = resolveUnit(text);
   if (!c) {
     msg.innerHTML = suggestions.length ? `Did you mean ${suggestions.map(u => `<button type="button" class="linkbtn" data-n="${esc(u.name)}">${esc(u.name)}</button>`).join(', ')}?` : `"${esc(text)}" is not in the list.`;
     msg.querySelectorAll('.linkbtn').forEach(b => b.onclick = () => globleGuess(b.dataset.n));
@@ -1296,7 +1416,7 @@ function neighborsRender() {
     <p class="sub">Select every ${esc(CUR.def.unit)} that shares a land border with the highlighted one, then check.</p>
     <div class="prompt">${flagImg(t, 'flag big')}${esc(t.name)}</div><div class="hint">${esc(t.region || '')} · running streak ${st}</div>
     <div class="chips">${S.options.map(chip).join('')}<button class="chip ${noneCls}" data-n="__none">No land borders</button></div>
-    <div id="nbfb"></div>
+    <div id="nbfb" aria-live="polite"></div>
     <div class="row">${S.checked ? '<button class="btn" id="nbnext">Next</button>' : '<button class="btn" id="nbcheck">Check</button> <button class="btn sec" id="nbskip">Skip</button>'}</div>
     ${coach(['Say neighbours clockwise from the north. A fixed order makes recall reliable under time pressure.',
       'Islands and near-islands are hot-and-cold traps: Sri Lanka, Madagascar, Cuba, Philippines, Japan, Iceland, New Zealand have no land borders.',
@@ -1358,10 +1478,10 @@ function closerRender() {
   panel.innerHTML = `<h2>Closer <span class="muted small">· distance intuition</span></h2>
     ${scopeLine()}
     <p class="sub">Which of the two is closer to the target? Distance is border-to-border, as in hot-and-cold games.</p>
-    <div class="hint">Running running streak ${st}</div>
+    <div class="hint">Running streak ${st}</div>
     <div class="prompt">${flagImg(S.x, 'flag big')}${esc(S.x.name)}</div>
     <div class="opts" id="copts"><button class="btn" data-k="a">${flagImg(S.a)}${esc(S.a.name)}</button><button class="btn" data-k="b">${flagImg(S.b)}${esc(S.b.name)}</button></div>
-    <div id="cfb"></div>
+    <div id="cfb" aria-live="polite"></div>
     ${coach(['Think in border hops, not map inches: hot-and-cold colours come from the nearest edges of two countries.',
       'Big countries are "close" to a lot: Russia is near Japan, Norway, Alaska and North Korea at once.',
       'Build a mental ruler: Paris–Moscow ≈ 2,500 km, Cairo–Cape Town ≈ 7,200 km, New York–LA ≈ 3,900 km.'])}`;
@@ -1404,11 +1524,12 @@ function nameitRender() {
   panel.innerHTML = `<h2>Name It <span class="muted small">· shape and position</span></h2>
     ${scopeLine()}
     <p class="sub">Which ${esc(CUR.def.unit)} is highlighted? No labels, no neighbours: just shape and position.</p>
-    <div class="hint">Running running streak ${st}</div>
+    <div class="hint">Running streak ${st}</div>
     <div class="opts" id="nopts">${S.opts.map((c, i) => `<button class="btn" data-i="${i}">${esc(c.name)}</button>`).join('')}</div>
-    <div id="nfb"></div>
+    <div id="nfb" aria-live="polite"></div>
     ${coach(['Distractors are always nearby, so this trains exactly the confusions that cost placement points.',
-      'Common swaps: Niger/Nigeria, Slovakia/Slovenia, Zambia/Zimbabwe, Guinea/Guinea-Bissau, Paraguay/Uruguay, Latvia/Lithuania, Oman/Yemen.'])}`;
+      CUR.isWorld ? 'Common swaps: Niger/Nigeria, Slovakia/Slovenia, Zambia/Zimbabwe, Guinea/Guinea-Bissau, Paraguay/Uruguay, Latvia/Lithuania, Oman/Yemen.'
+        : `Note each ${esc(CUR.def.unit)}'s outline against its neighbours: a coast, a straight border or a notch is usually what gives it away.`])}`;
   panel.querySelectorAll('#nopts .btn').forEach(b => b.onclick = () => nameitAnswer(+b.dataset.i));
 }
 function nameitAnswer(i) {
@@ -1448,10 +1569,10 @@ function flagsRender() {
   panel.innerHTML = `<h2>Flags <span class="muted small">· whose flag?</span></h2>
     ${scopeLine()}
     <p class="sub">Name the country. Options are neighbours, so similar regional flags are the test.</p>
-    <div class="hint">Running running streak ${st}</div>
+    <div class="hint">Running streak ${st}</div>
     <div class="flagstage"><img src="data/flags/${flagCode(S.t)}.svg" alt="Flag to identify"></div>
     <div class="opts" id="fopts">${S.opts.map((c, i) => `<button class="btn" data-i="${i}">${esc(c.name)}</button>`).join('')}</div>
-    <div id="ffb"></div>
+    <div id="ffb" aria-live="polite"></div>
     ${coach(['Group flags by family: Pan-African (green, yellow, red), Pan-Arab (red, white, black, green), Nordic crosses, Pan-Slavic tricolours, Central American blue-white-blue.',
       'Lookalikes worth drilling: Chad/Romania, Indonesia/Monaco, Australia/New Zealand, Ireland/Côte d\'Ivoire, Norway/Iceland, Senegal/Mali/Guinea.'])}`;
   panel.querySelectorAll('#fopts .btn').forEach(b => b.onclick = () => flagsAnswer(+b.dataset.i));
@@ -1510,11 +1631,11 @@ function cluesRender() {
   panel.innerHTML = `<h2>Clues <span class="muted small">· what you'd see on the street</span></h2>
     ${scopeLine()}
     <p class="sub">Which country matches these clues? Options share the driving side and region, so the details decide it.</p>
-    <div class="hint">Running running streak ${st}</div>
+    <div class="hint">Running streak ${st}</div>
     ${clueRows(S.t, S.shown)}
     <div class="row" style="margin:6px 0 10px">${S.hidden.length ? '<button class="btn sec" id="morec">Reveal another clue</button>' : ''}</div>
     <div class="opts" id="clopts">${S.opts.map((c, i) => `<button class="btn" data-i="${i}">${esc(c.name)}</button>`).join('')}</div>
-    <div id="clfb"></div>
+    <div id="clfb" aria-live="polite"></div>
     ${coach(['Order of checks on a real round: driving side, then road-line colours, then script and language, then plates, poles and bollards.',
       'Camera-car quirks are the fastest tells: Kenya snorkel, Ghana tape, Nigeria follow car, Senegal and Mongolia visible car.',
       'Yellow centre lines point to the Americas and a few others (Norway, older Finnish imagery, Japan where overtaking is banned); all-white lines suggest most of Europe.'])}`;
@@ -1544,6 +1665,7 @@ function cluesAnswer(i) {
 // ----- Stats -----
 document.getElementById('statsbtn').onclick = () => openStats();
 function openStats() {
+  stashView();
   resetGlobe(); G.hover = true; [...nav.children].forEach(b => b.classList.remove('on')); mode = 'stats'; updateLabelButton(); syncHash();
   if (tourTimer) { clearInterval(tourTimer); tourTimer = null; }
   const rows = Object.entries(STATS.units).filter(([, v]) => v.seen >= 2 && v.miss > 0).map(([k, v]) => ({ k, rate: v.miss / v.seen, ...v })).sort((a, b) => b.rate - a.rate || b.seen - a.seen);
