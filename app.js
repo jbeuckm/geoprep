@@ -512,7 +512,57 @@ function render() {
   if (LABELS.level > 0 && labelsAllowed() && !G.coarse) drawLearningLabels(center, placed, hits);
   ctx.beginPath(); G.path({ type: 'Sphere' }); ctx.strokeStyle = border; ctx.lineWidth = 1; ctx.stroke();
 }
-let pulseTimer = null;
+// ---------- Zooming about a fixed screen point ----------
+// Rotation that puts geographic point p at screen point (sx, sy) at the given zoom (Newton steps, numeric Jacobian).
+function rotationFor(p, sx, sy, zoom, r0) {
+  const pr = d3.geoOrthographic().clipAngle(90).precision(PREC).scale(G.base * zoom).translate([G.w / 2, G.h / 2]);
+  const at = r => { pr.rotate(r); const xy = pr(p); return xy ? [xy[0] - sx, xy[1] - sy] : null; };
+  let r = r0.slice();
+  for (let i = 0; i < 12; i++) {
+    const e = at(r); if (!e) return null;
+    if (Math.hypot(e[0], e[1]) < 0.05) break;
+    const h = 0.01, ea = at([r[0] + h, r[1]]), eb = at([r[0], r[1] + h]); if (!ea || !eb) return null;
+    const a = (ea[0] - e[0]) / h, c = (ea[1] - e[1]) / h, b = (eb[0] - e[0]) / h, d = (eb[1] - e[1]) / h, det = a * d - b * c;
+    if (!det) return null;
+    r = [r[0] - (d * e[0] - b * e[1]) / det, Math.max(-89, Math.min(89, r[1] - (-c * e[0] + a * e[1]) / det))];
+  }
+  const e = at(r); if (!e || Math.hypot(e[0], e[1]) > 0.5) return null;
+  if (d3.geoDistance(p, [-r[0], -r[1]]) > Math.PI / 2 - 0.05) return null;
+  return r;
+}
+// A zoom (and matching rotation) that keeps the tap at its screen spot and shows the answer clearly apart from it.
+function anchoredView(p, sp, target, dir) {
+  const fits = (r, z) => {
+    const pr = d3.geoOrthographic().clipAngle(90).scale(G.base * z).translate([G.w / 2, G.h / 2]).rotate(r);
+    if (d3.geoDistance(target, [-r[0], -r[1]]) > Math.PI / 2 - 0.08) return false;
+    const t = pr(target), m = 40;
+    if (!t || t[0] < m || t[1] < m || t[0] > G.w - m || t[1] > G.h - m) return false;
+    return Math.hypot(t[0] - sp[0], t[1] - sp[1]) >= 40;
+  };
+  const zs = [];
+  if (dir === 'out') for (let z = G.zoom / 1.25; z > 0.95; z /= 1.25) zs.push(z);
+  else for (let z = G.zoom * 1.4; z <= 48; z *= 1.4) zs.push(z);
+  if (dir === 'out' && G.zoom > 1) zs.push(1);
+  let r = G.rotate.slice();
+  for (const z of zs) {
+    const rr = rotationFor(p, sp[0], sp[1], z, r); if (!rr) continue;
+    r = rr;
+    if (fits(rr, z)) return { zoom: z, rotate: rr };
+  }
+  return null;
+}
+// Animate the zoom while the tapped point stays pinned under the finger.
+function zoomAbout(p, sp, z1, ms = 750) {
+  if (G.anim) G.anim.stop();
+  const z0 = G.zoom, ease = d3.easeCubicInOut;
+  G.anim = d3.timer(el => {
+    const t = Math.min(1, el / ms), z = z0 * Math.pow(z1 / z0, ease(t));
+    const r = rotationFor(p, sp[0], sp[1], z, G.rotate); if (r) G.rotate = r;
+    G.zoom = z;
+    if (t >= 1) { G.anim.stop(); G.anim = null; G.coarse = false; render(); } else { G.coarse = true; render(); }
+  });
+}
+let pulseTimer = null, revealTimer = null;
 function pulseMarkers() { if (pulseTimer) pulseTimer.stop(); pulseTimer = d3.timer(el => { render(); if (el > 850) { pulseTimer.stop(); pulseTimer = null; } }); }
 function flyTo(lonlat, zoom, ms = 900) {
   if (G.anim) G.anim.stop();
@@ -771,6 +821,7 @@ canvas.addEventListener('pointerdown', e => {
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
   try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
   if (G.anim) { G.anim.stop(); G.anim = null; }
+  clearTimeout(revealTimer);
   if (pointers.size === 2) { const [a, b] = [...pointers.values()]; pinch = { d0: Math.hypot(a.x - b.x, a.y - b.y), z0: G.zoom }; down = null; moved = true; return; }
   down = { x: e.clientX, y: e.clientY, r: G.rotate.slice() }; moved = false;
 });
@@ -814,12 +865,13 @@ canvas.addEventListener('pointerup', e => {
 canvas.addEventListener('pointercancel', endPointer);
 canvas.addEventListener('pointerleave', () => { if (!down) { tip.style.display = 'none'; if (G.hoverName) { G.hoverName = null; render(); } } });
 canvas.addEventListener('wheel', e => { e.preventDefault(); setZoom(G.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)); }, { passive: false });
-function setZoom(z) { G.zoom = Math.max(0.6, Math.min(48, z)); renderCoarse(); }
+function setZoom(z) { clearTimeout(revealTimer); G.zoom = Math.max(0.6, Math.min(48, z)); renderCoarse(); }
 document.getElementById('zin').onclick = () => setZoom(G.zoom * 1.4);
 document.getElementById('zout').onclick = () => setZoom(G.zoom / 1.4);
 document.getElementById('zreset').onclick = flyHome;
 window.addEventListener('resize', resize);
 function resetGlobe() {
+  clearTimeout(revealTimer);
   G.fill = () => null; G.stroke = () => null; G.markers = []; G.lines = []; G.onTap = null; G.hover = false; G.hoverName = null;
   canvas.classList.remove('tap'); tip.style.display = 'none';
   const side = document.getElementById('side'); if (side) side.scrollTop = 0; // each new question starts at the top of the panel
@@ -1261,12 +1313,22 @@ function tapAnswer(p) {
   const onScreen = (ll, xy) => d3.geoDistance(ll, here) < Math.PI / 2 - 0.05 && xy[0] > 30 && xy[1] > 30 && xy[0] < G.w - 30 && xy[1] < G.h - 30;
   const bothVisible = onScreen(p, sp) && onScreen(target, st);
   const apart = Math.hypot(sp[0] - st[0], sp[1] - st[1]);
-  let ct = here, zt = G.zoom, move = false;
+  let ct = here, zt = G.zoom, move = false, anchored = null;
   if (!inside && !(bothVisible && apart >= 40)) {
-    const theta = d3.geoDistance(p, target);
-    ct = d3.geoInterpolate(p, target)(0.5); zt = Math.max(bothVisible ? G.zoom : 1, Math.min(24, 0.7 / Math.max(theta, 1e-4))); move = true;
+    // First choice: zoom about the tap itself (out to bring the answer into view, or in to separate the dots),
+    // so your marker never leaves your finger. Only if that cannot show both does the view pan.
+    anchored = anchoredView(p, sp, target, bothVisible ? 'in' : 'out');
+    if (anchored) { zt = anchored.zoom; ct = [-anchored.rotate[0], -anchored.rotate[1]]; }
+    else {
+      const theta = d3.geoDistance(p, target);
+      ct = d3.geoInterpolate(p, target)(0.5); zt = Math.max(bothVisible ? G.zoom : 1, Math.min(24, 0.7 / Math.max(theta, 1e-4))); move = true;
+    }
   }
-  if (move) flyTo(ct, zt); else pulseMarkers();
+  if (anchored) zoomAbout(p, sp, anchored.zoom);
+  else if (move) { // the answer is round the back of the globe: show your marker where you tapped first, then turn
+    pulseMarkers();
+    clearTimeout(revealTimer); revealTimer = setTimeout(() => { if (S.q === q && mode === 'tap') flyTo(ct, zt); }, 1100);
+  } else pulseMarkers();
   G.markers = G.markers.concat(contextLabels(ct, zt, new Set(q.kind === 'unit' ? [q.c] : q.pl.units)));
   const cls = score >= 80 ? 'ok' : score >= 40 ? 'warn' : 'bad';
   setTimeout(() => revealFeedback('#tapfb'), 50);
@@ -1682,7 +1744,9 @@ function openStats() {
     <h2 style="margin-top:14px">Weak spots</h2>
     <p class="muted small">Places you have seen at least twice and missed at least once. They come up more often in every mode.</p>
     ${weak.length ? weak.map(r => `<div class="stat"><span>${r.level === 'world' ? flagImg(WORLD.byName.get(r.name)) : ''}${esc(r.name)} <span class="muted small">${r.level === 'world' ? '' : esc(LEVEL_DEFS[r.level].label.split(' · ')[0])}</span></span><b>${r.miss} of ${r.seen} missed</b></div>`).join('') : '<p class="muted small">Nothing yet. Play a few rounds.</p>'}
-    <div class="row" style="margin-top:14px"><button class="btn sec" id="reset">Reset all stats</button></div>`;
+    <div class="row" style="margin-top:14px"><button class="btn sec" id="reset">Reset all stats</button></div>
+    <div class="small muted" id="appver" style="margin-top:10px"></div>`;
+  if (window.caches) caches.keys().then(k => { const v = k.find(x => /^geodrill-v\d+$/.test(x)); const el = document.getElementById('appver'); if (v && el) el.textContent = 'App version ' + v.replace('geodrill-', ''); }).catch(() => {});
   document.getElementById('reset').onclick = () => {
     if (!confirm('Erase all progress?')) return;
     STATS = { units: {}, globle: [], tap: [], streaks: {} }; save();
