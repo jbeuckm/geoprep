@@ -3,7 +3,7 @@
    Scope: any level can be narrowed to a region; every drill and the study guide respect it. */
 (() => {
 'use strict';
-const APP_VERSION = 'v30'; // keep in step with VERSION in sw.js
+const APP_VERSION = 'v31'; // keep in step with VERSION in sw.js
 const REDUCED = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // ---------- Names (world level) ----------
@@ -2127,6 +2127,43 @@ function clueRows(u, keys, quiz = false) {
   const label = k => k === 'lang' && quiz ? 'Signs read' : CLUE_LABELS[k] || k;
   return `<div class="clues">${(keys || Object.keys(c)).filter(k => c[k] && val(k)).map(k => `<div class="clue"><span class="ck">${label(k)}</span><span${k === 'lang' && quiz ? ' class="sample"' : ''}>${esc(val(k))}</span></div>`).join('')}</div>`;
 }
+// After a wrong answer: what separates the pick from the answer, clue by clue, or an honest "these look alike".
+const CMP_ORDER = ['drive', 'lines', 'signs', 'lang', 'plates', 'bollards', 'poles', 'car', 'other'];
+const CMP_STOP = new Set(['and', 'the', 'with', 'or', 'of', 'a', 'an', 'in', 'on', 'often', 'some', 'both', 'used', 'mostly', 'usually', 'e', 'g', 'eg']);
+function clueWords(t) {
+  return new Set(t.toLowerCase().replace(/center/g, 'centre').replace(/color/g, 'colour').split(/[^\p{L}\p{N}]+/u).filter(w => w.length > 1 && !CMP_STOP.has(w)));
+}
+function cluesAlike(k, a, b) {
+  if (k === 'drive') return a === b;
+  const A = clueWords(a), B = clueWords(b); let n = 0; A.forEach(w => { if (B.has(w)) n++; });
+  return n / (A.size + B.size - n || 1) >= 0.75;
+}
+function clueCompare(pick, ans, shown) {
+  const P = window.CLUES[pick.name] || {}, T = window.CLUES[ans.name] || {}, SS = window.SIGN_SAMPLES || {};
+  // Mark the words one side has and the other lacks, so the actual difference stands out.
+  // Only when the two mostly overlap: if nearly every word differs, marking them all is noise.
+  const marked = (t, other) => { const O = other ? clueWords(other) : new Set(), W = [...clueWords(t)];
+    if (!other || W.filter(w => O.has(w)).length < Math.min(W.length, O.size) / 2) other = null;
+    return t.split(/([\p{L}\p{N}]+)/u).map((w, j) => { const n = w.toLowerCase().replace(/center/g, 'centre').replace(/color/g, 'colour');
+      return j % 2 && other && n.length > 1 && !CMP_STOP.has(n) && !O.has(n) ? `<mark>${esc(w)}</mark>` : esc(w); }).join(''); };
+  const txt = (u, c, o, k) => marked(c[k], k === 'drive' ? null : o[k]) + (k === 'lang' && SS[u.name] ? ` · signs read: <span class="sample">${esc(SS[u.name])}</span>` : '');
+  const keys = [...shown.filter(k => CMP_ORDER.includes(k)), ...CMP_ORDER.filter(k => !shown.includes(k))];
+  const diff = [], alike = [];
+  for (const k of keys) {
+    if (P[k] && T[k]) (cluesAlike(k, P[k], T[k]) ? alike : diff).push(k);
+    else if (T[k] && shown.includes(k)) diff.push(k); // you saw it; the pick has no matching tell
+  }
+  const lab = k => k === 'drive' ? 'driving side' : k === 'lang' ? 'language' : (CLUE_LABELS[k] || k).toLowerCase();
+  const alikeTxt = alike.map(k => k === 'drive' ? `both drive on the ${T.drive}` : `${lab(k)} (${T[k]})`);
+  const seen = k => shown.includes(k) ? ' <span class="cmp-seen">you saw this</span>' : '';
+  const row = k => `<div class="cmp-row"><div class="cmp-k">${CLUE_LABELS[k] || k}${seen(k)}</div>
+    <div class="cmp-v ans"><b>${esc(ans.name)}</b> ${txt(ans, T, P, k)}</div>
+    <div class="cmp-v pick"><b>${esc(pick.name)}</b> ${P[k] ? txt(pick, P, T, k) : '<span class="muted">no well-known tell here</span>'}</div></div>`;
+  if (!diff.length) return `<div class="cmp"><div class="cmp-h">${esc(pick.name)} vs ${esc(ans.name)}</div>
+    <p class="small">Honestly, these two look much alike on the street: ${alikeTxt.map(esc).join('; ') || 'few recorded differences'}. The clues don't separate them well, so a sign, a shop name or the landscape usually has to decide it.</p></div>`;
+  return `<div class="cmp"><div class="cmp-h">How to tell ${esc(ans.name)} from ${esc(pick.name)}</div>${diff.map(row).join('')}
+    ${alikeTxt.length ? `<p class="small muted" style="margin:6px 0 0">Alike: ${alikeTxt.map(esc).join('; ')}.</p>` : ''}</div>`;
+}
 function clueCard(u) {
   if (!window.CLUES[u.name]) return '';
   return `<details class="cluebox" open><summary>Street clues${u.capital ? ` · capital ${esc(u.capital)}` : ''}</summary>${clueRows(u)}</details>`;
@@ -2182,7 +2219,7 @@ function cluesAnswer(i) {
   setTimeout(() => revealFeedback('#clfb'), 50);
   document.getElementById('clfb').innerHTML = `<div class="card ${correct ? 'ok' : 'bad'}"><div class="big">${flagImg(S.t, 'flag big')}${correct ? 'Correct' : 'It was ' + esc(S.t.name)}</div>
     <div class="small muted">${esc(S.t.region || '')}${S.t.capital ? ' · Capital: ' + esc(S.t.capital) : ''}</div>
-    ${clueRows(S.t)}
+    ${correct ? clueRows(S.t) : clueCompare(S.opts[i], S.t, S.shown) + `<details class="cluebox"><summary>All clues for ${esc(S.t.name)}</summary>${clueRows(S.t)}</details>`}
     <div style="margin-top:8px"><button class="btn" id="clnext">Next</button></div></div>${(document.getElementById('clcoach') || {}).innerHTML || ''}`;
   document.getElementById('clnext').onclick = () => advance(() => { resetGlobe(); cluesStart(); });
   render();
